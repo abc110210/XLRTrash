@@ -8,12 +8,13 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.util.ArrayList;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,9 +26,10 @@ public final class Shan extends JavaPlugin implements Listener {
     private static final int ROWS = 6;
     private static final int SIZE = ROWS * 9;
 
-    private final List<ItemStack> globalTrashItems = new ArrayList<>();
+    private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
+    private final Object trashLock = new Object();
 
     @Override
     public void onEnable() {
@@ -47,20 +49,12 @@ public final class Shan extends JavaPlugin implements Listener {
             return true;
         });
 
-        getLogger().info(ChatColor.GREEN + "[XLRTrash] 全服垃圾桶插件已启用！");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "====================================");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[XLRTrash] 插件作者: Shan");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[XLRTrash] 版本: 1.0");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[XLRTrash] 功能: 全服垃圾桶系统");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "====================================");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家" + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + "插件,交流群: 943446220");
     }
 
     @Override
     public void onDisable() {
-        getLogger().info(ChatColor.RED + "[XLRTrash] 全服垃圾桶插件已卸载！");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "====================================");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[XLRTrash] 感谢使用！");
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "====================================");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件" + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + "已卸载，感谢使用寄寄の家插件!");
     }
 
     private void openPersonalTrash(Player player) {
@@ -82,16 +76,18 @@ public final class Shan extends JavaPlugin implements Listener {
         playerPage.put(player, page);
         Inventory inv = Bukkit.createInventory(null, SIZE, GLOBAL_TRASH_TITLE);
 
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < 9; col++) {
-                if (isBorder(row, col)) {
-                    inv.setItem(row * 9 + col, createBorderItem(Material.GLASS_PANE));
-                } else if (isInnerStorage(row, col)) {
-                    int index = getStorageIndex(row, col, page);
-                    if (index < globalTrashItems.size()) {
-                        ItemStack item = globalTrashItems.get(index);
-                        if (item != null) {
-                            inv.setItem(row * 9 + col, item.clone());
+        synchronized (trashLock) {
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < 9; col++) {
+                    if (isBorder(row, col)) {
+                        inv.setItem(row * 9 + col, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
+                    } else if (isInnerStorage(row, col)) {
+                        int index = getStorageIndex(row, col, page);
+                        if (index < globalTrashItems.size()) {
+                            ItemStack item = globalTrashItems.get(index);
+                            if (item != null) {
+                                inv.setItem(row * 9 + col, item.clone());
+                            }
                         }
                     }
                 }
@@ -103,9 +99,9 @@ public final class Shan extends JavaPlugin implements Listener {
             inv.setItem(lastRow * 9 + 3, createNavigationItem(Material.LAPIS_LAZULI, "§a上一页"));
         }
         if ((page + 1) * getMaxStoragePerPage() < globalTrashItems.size() || shouldShowNextPage(page)) {
-            inv.setItem(lastRow * 9 + 5, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
+            inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         } else if (page == 0) {
-            inv.setItem(lastRow * 9 + 5, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
+            inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         }
 
         player.openInventory(inv);
@@ -117,6 +113,10 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private boolean isInnerStorage(int row, int col) {
         return row > 0 && row < 5 && col > 0 && col < 8;
+    }
+
+    private boolean isNavigationSlot(int row, int col) {
+        return row == 5 && (col == 3 || col == 4);
     }
 
     private int getStorageIndex(int row, int col, int page) {
@@ -166,8 +166,6 @@ public final class Shan extends JavaPlugin implements Listener {
             return;
         }
 
-        event.setCancelled(true);
-
         if (!(event.getWhoClicked() instanceof Player)) {
             return;
         }
@@ -177,80 +175,52 @@ public final class Shan extends JavaPlugin implements Listener {
         int row = slot / 9;
         int col = slot % 9;
 
-        if (isBorder(row, col)) {
+        if (title.equals(PERSONAL_TRASH_TITLE)) {
+            if (isBorder(row, col)) {
+                event.setCancelled(true);
+            }
             return;
         }
 
-        if (title.equals(PERSONAL_TRASH_TITLE)) {
-            handlePersonalTrashClick(event, player, slot);
-        } else if (title.equals(GLOBAL_TRASH_TITLE)) {
-            handleGlobalTrashClick(event, player, slot, row, col);
+        if (title.equals(GLOBAL_TRASH_TITLE)) {
+            event.setCancelled(true);
+
+            if (isBorder(row, col)) {
+                return;
+            }
+
+            if (isNavigationSlot(row, col)) {
+                int currentPage = playerPage.getOrDefault(player, 0);
+                if (col == 3 && currentPage > 0) {
+                    openGlobalTrash(player, currentPage - 1);
+                } else if (col == 4) {
+                    openGlobalTrash(player, currentPage + 1);
+                }
+            } else if (isInnerStorage(row, col)) {
+                synchronized (trashLock) {
+                    ItemStack clickedItem = event.getCurrentItem();
+                    if (clickedItem != null && clickedItem.getType() != Material.AIR) {
+                        int index = getStorageIndex(row, col, playerPage.getOrDefault(player, 0));
+                        if (index < globalTrashItems.size()) {
+                            ItemStack item = globalTrashItems.get(index);
+                            if (item != null) {
+                                globalTrashItems.remove(index);
+                                player.getInventory().addItem(clickedItem.clone());
+                                event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
+                                player.updateInventory();
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    private void handlePersonalTrashClick(InventoryClickEvent event, Player player, int slot) {
-        Inventory inv = event.getClickedInventory();
-        if (inv == null) return;
-
-        switch (event.getAction()) {
-            case PLACE_ONE:
-            case PLACE_SOME:
-            case PLACE_ALL:
-            case SWAP_WITH_CURSOR:
-                ItemStack cursorItem = event.getCursor();
-                if (cursorItem != null && cursorItem.getType() != Material.AIR) {
-                    ItemStack itemToPlace = cursorItem.clone();
-                    itemToPlace.setAmount(Math.min(itemToPlace.getAmount(), Math.min(
-                        event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_ONE ? 1 :
-                        event.getAction() == org.bukkit.event.inventory.InventoryAction.PLACE_SOME ? cursorItem.getAmount() :
-                        cursorItem.getAmount(), cursorItem.getAmount())));
-                    inv.setItem(slot, itemToPlace);
-                    player.setItemOnCursor(new ItemStack(Material.AIR));
-                }
-                break;
-
-            case PICKUP_ONE:
-            case PICKUP_SOME:
-            case PICKUP_ALL:
-            case MOVE_TO_OTHER_INVENTORY:
-            case HOTBAR_SWAP:
-            case HOTBAR_MOVE_AND_READD:
-            case COLLECT_TO_CURSOR:
-                ItemStack clickedItem = inv.getItem(slot);
-                if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                    player.getInventory().addItem(clickedItem.clone());
-                    inv.setItem(slot, new ItemStack(Material.AIR));
-                }
-                break;
-
-            default:
-                break;
-        }
-
-        player.updateInventory();
-    }
-
-    private void handleGlobalTrashClick(InventoryClickEvent event, Player player, int slot, int row, int col) {
-        int lastRow = 5;
-        int currentPage = playerPage.getOrDefault(player, 0);
-
-        if (row == lastRow) {
-            if (col == 3 && currentPage > 0) {
-                openGlobalTrash(player, currentPage - 1);
-            } else if (col == 5) {
-                openGlobalTrash(player, currentPage + 1);
-            }
-        } else if (isInnerStorage(row, col)) {
-            ItemStack clickedItem = event.getCurrentItem();
-            if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                int index = getStorageIndex(row, col, currentPage);
-                if (index < globalTrashItems.size()) {
-                    globalTrashItems.remove(index);
-                    player.getInventory().addItem(clickedItem.clone());
-                    event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
-                    player.updateInventory();
-                }
-            }
+    @EventHandler
+    public void onInventoryDrag(InventoryDragEvent event) {
+        String title = event.getView().getTitle();
+        if (title.equals(GLOBAL_TRASH_TITLE)) {
+            event.setCancelled(true);
         }
     }
 
@@ -268,12 +238,14 @@ public final class Shan extends JavaPlugin implements Listener {
         Player player = (Player) event.getPlayer();
         Inventory inv = event.getInventory();
 
-        for (int row = 0; row < ROWS; row++) {
-            for (int col = 0; col < 9; col++) {
-                if (!isBorder(row, col)) {
-                    ItemStack item = inv.getItem(row * 9 + col);
-                    if (item != null && item.getType() != Material.AIR) {
-                        globalTrashItems.add(item.clone());
+        synchronized (trashLock) {
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < 9; col++) {
+                    if (!isBorder(row, col)) {
+                        ItemStack item = inv.getItem(row * 9 + col);
+                        if (item != null && item.getType() != Material.AIR) {
+                            globalTrashItems.add(item.clone());
+                        }
                     }
                 }
             }
