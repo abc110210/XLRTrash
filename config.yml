@@ -25,3 +25,9 @@ GlobalTrash2:
 
 # 转移到垃圾桶提示
 TrashTip: "&a物品已转移到全服垃圾桶！"
+
+# 定期清除提示
+ClearTip: "&c[全服垃圾桶] 垃圾桶已定期清理！"
+
+# 清除间隔（分钟）
+ClearInterval: 5
