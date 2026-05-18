@@ -89,18 +89,25 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private void startCountdown() {
         isCountingDown = true;
+        if (countdownTips.isEmpty()) {
+            performCleanup();
+            return;
+        }
+
         List<Integer> sortedSeconds = new ArrayList<>(countdownTips.keySet());
         sortedSeconds.sort(Integer::compareTo);
-        Collections.reverse(sortedSeconds);
+
+        int maxSeconds = sortedSeconds.get(sortedSeconds.size() - 1);
 
         for (int seconds : sortedSeconds) {
             int finalSeconds = seconds;
+            long delayTicks = (maxSeconds - seconds) * 20L;
             Bukkit.getScheduler().runTaskLater(this, () -> {
                 broadcastCountdown(finalSeconds);
                 if (finalSeconds == 0) {
                     performCleanup();
                 }
-            }, seconds * 20L);
+            }, delayTicks);
         }
     }
 
