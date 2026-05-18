@@ -187,6 +187,16 @@ public final class Shan extends JavaPlugin implements Listener {
         Map<Integer, Integer> slotToGlobalIndex = new HashMap<>();
 
         synchronized (trashLock) {
+            // Add borders first
+            for (int row = 0; row < ROWS; row++) {
+                for (int col = 0; col < 9; col++) {
+                    int slot = row * 9 + col;
+                    if (isBorder(row, col)) {
+                        inv.setItem(slot, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
+                    }
+                }
+            }
+
             int maxStoragePerPage = getMaxStoragePerPage();
             int logicalStartIndex = page * maxStoragePerPage;
             int logicalCount = 0;
@@ -210,16 +220,6 @@ public final class Shan extends JavaPlugin implements Listener {
                         displaySlot++;
                     }
                     logicalCount++;
-                }
-            }
-
-            // Add borders
-            for (int row = 0; row < ROWS; row++) {
-                for (int col = 0; col < 9; col++) {
-                    int slot = row * 9 + col;
-                    if (isBorder(row, col)) {
-                        inv.setItem(slot, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
-                    }
                 }
             }
 
@@ -365,6 +365,7 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (isInnerStorage(row, col)) {
+                event.setCancelled(true);
                 synchronized (trashLock) {
                     ItemStack clickedItem = event.getCurrentItem();
                     if (clickedItem != null && clickedItem.getType() != Material.AIR) {
@@ -376,11 +377,11 @@ public final class Shan extends JavaPlugin implements Listener {
                                 if (item != null) {
                                     globalTrashItems.remove(globalIndex);
                                     player.getInventory().addItem(clickedItem.clone());
-                                    int currentPage = playerPage.getOrDefault(player, 0);
-                                    openGlobalTrash(player, currentPage);
                                 }
                             }
                         }
+                        int currentPage = playerPage.getOrDefault(player, 0);
+                        openGlobalTrash(player, currentPage);
                     }
                 }
             }
