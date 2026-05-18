@@ -396,13 +396,11 @@ public final class Shan extends JavaPlugin implements Listener {
 
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
-                    player.sendMessage("§c错误：无法找到槽位映射");
                     return;
                 }
 
                 Integer globalIndex = slotMap.get(slot);
                 if (globalIndex == null) {
-                    player.sendMessage("§c错误：无法找到物品索引，槽位：" + slot);
                     return;
                 }
 
@@ -410,20 +408,24 @@ public final class Shan extends JavaPlugin implements Listener {
                     if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
                         ItemStack item = globalTrashItems.get(globalIndex);
                         if (item != null && item.getType() != Material.AIR) {
+                            // Remove the item first
                             globalTrashItems.remove(globalIndex);
+
+                            // Add to player inventory
                             player.getInventory().addItem(clickedItem.clone());
-                            player.sendMessage("§a已取出物品，剩余物品数：" + globalTrashItems.size());
-                        } else {
-                            player.sendMessage("§c错误：物品为空");
+
+                            // Clear the old mapping immediately
+                            slotGlobalIndexMap.remove(player);
+
+                            // Clear the clicked slot in GUI immediately to prevent multiple clicks
+                            event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
+
+                            // Refresh GUI
+                            int currentPage = playerPage.getOrDefault(player, 0);
+                            openGlobalTrash(player, currentPage);
                         }
-                    } else {
-                        player.sendMessage("§c错误：索引超出范围，索引：" + globalIndex + "，总数：" + globalTrashItems.size());
                     }
                 }
-
-                // Refresh GUI outside synchronized block
-                int currentPage = playerPage.getOrDefault(player, 0);
-                openGlobalTrash(player, currentPage);
             }
         }
     }
