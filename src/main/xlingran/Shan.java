@@ -114,7 +114,9 @@ public final class Shan extends JavaPlugin implements Listener {
     private void broadcastCountdown(int seconds) {
         String message = countdownTips.get(seconds);
         if (message != null && !message.isEmpty()) {
-            Bukkit.broadcastMessage(message);
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                player.sendMessage(message);
+            }
         }
     }
 
@@ -394,11 +396,13 @@ public final class Shan extends JavaPlugin implements Listener {
 
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
+                    player.sendMessage("§c错误：无法找到槽位映射");
                     return;
                 }
 
                 Integer globalIndex = slotMap.get(slot);
                 if (globalIndex == null) {
+                    player.sendMessage("§c错误：无法找到物品索引，槽位：" + slot);
                     return;
                 }
 
@@ -408,7 +412,12 @@ public final class Shan extends JavaPlugin implements Listener {
                         if (item != null && item.getType() != Material.AIR) {
                             globalTrashItems.remove(globalIndex);
                             player.getInventory().addItem(clickedItem.clone());
+                            player.sendMessage("§a已取出物品，剩余物品数：" + globalTrashItems.size());
+                        } else {
+                            player.sendMessage("§c错误：物品为空");
                         }
+                    } else {
+                        player.sendMessage("§c错误：索引超出范围，索引：" + globalIndex + "，总数：" + globalTrashItems.size());
                     }
                 }
 
