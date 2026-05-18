@@ -387,20 +387,21 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (isInnerStorage(row, col)) {
-                event.setCancelled(true);
-
                 ItemStack clickedItem = event.getCurrentItem();
                 if (clickedItem == null || clickedItem.getType() == Material.AIR) {
+                    event.setCancelled(true);
                     return;
                 }
 
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
+                    event.setCancelled(true);
                     return;
                 }
 
                 Integer globalIndex = slotMap.get(slot);
                 if (globalIndex == null) {
+                    event.setCancelled(true);
                     return;
                 }
 
@@ -408,24 +409,29 @@ public final class Shan extends JavaPlugin implements Listener {
                     if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
                         ItemStack item = globalTrashItems.get(globalIndex);
                         if (item != null && item.getType() != Material.AIR) {
-                            // Remove the item first
+                            // Remove the item from list
                             globalTrashItems.remove(globalIndex);
 
-                            // Add to player inventory
-                            player.getInventory().addItem(clickedItem.clone());
-
-                            // Clear the old mapping immediately
+                            // Clear the mapping to prevent reuse
                             slotGlobalIndexMap.remove(player);
 
-                            // Clear the clicked slot in GUI immediately to prevent multiple clicks
-                            event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
-
-                            // Refresh GUI
-                            int currentPage = playerPage.getOrDefault(player, 0);
-                            openGlobalTrash(player, currentPage);
+                            // Close the inventory immediately
+                            player.closeInventory();
                         }
                     }
                 }
+
+                // Cancel the event AFTER closing inventory
+                event.setCancelled(true);
+
+                // Give items to player outside synchronized block
+                player.getInventory().addItem(clickedItem.clone());
+
+                // Reopen the GUI with updated items
+                Bukkit.getScheduler().runTaskLater(this, () -> {
+                    int currentPage = playerPage.getOrDefault(player, 0);
+                    openGlobalTrash(player, currentPage);
+                }, 1L);
             }
         }
     }
