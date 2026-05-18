@@ -52,12 +52,12 @@ public final class Shan extends JavaPlugin implements Listener {
             return true;
         });
 
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家" + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + "插件,交流群: 943446220");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
     }
 
     @Override
     public void onDisable() {
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件" + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + "已卸载，感谢使用寄寄の家插件!");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄寄の家插件!");
     }
 
     private void openPersonalTrash(Player player) {
@@ -267,14 +267,20 @@ public final class Shan extends JavaPlugin implements Listener {
                     existing.setAmount(maxStackSize);
                     ItemStack remaining = item.clone();
                     remaining.setAmount(newAmount - maxStackSize);
-                    merged.add(remaining);
+                    String remainingKey = getItemKey(remaining);
+                    ItemStack existingRemaining = typeMap.get(remainingKey);
+                    if (existingRemaining != null) {
+                        existingRemaining.setAmount(existingRemaining.getAmount() + remaining.getAmount());
+                    } else {
+                        typeMap.put(remainingKey, remaining);
+                    }
                 }
             } else {
                 typeMap.put(key, item.clone());
-                merged.add(item.clone());
             }
         }
 
+        merged.addAll(typeMap.values());
         return merged;
     }
 
