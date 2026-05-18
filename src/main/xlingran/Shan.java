@@ -16,6 +16,8 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,8 +33,11 @@ public final class Shan extends JavaPlugin implements Listener {
     private String nextPageName;
     private String prevPageName;
     private String transferTip;
-    private String clearTip;
+    private Map<Integer, String> countdownTips;
+    private String clearTrashDisabledTip;
+    private boolean clearTrashDisabled;
     private int clearInterval;
+    private volatile boolean isCountingDown = false;
 
     private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
@@ -63,8 +68,7 @@ public final class Shan extends JavaPlugin implements Listener {
         });
 
         startCleanupTask();
-
-        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
     }
 
     @Override
@@ -72,25 +76,62 @@ public final class Shan extends JavaPlugin implements Listener {
         if (cleanupTaskId != -1) {
             getServer().getScheduler().cancelTask(cleanupTaskId);
         }
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄寄の家插件!");
+        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄の家插件!");
     }
 
     private void startCleanupTask() {
         long intervalTicks = clearInterval * 60L * 20L;
         cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
-            cleanupTrash();
+            startCountdown();
         }, intervalTicks, intervalTicks).getTaskId();
     }
 
-    private void cleanupTrash() {
+    private void startCountdown() {
+        isCountingDown = true;
+        List<Integer> sortedSeconds = new ArrayList<>(countdownTips.keySet());
+        sortedSeconds.sort(Integer::compareTo);
+        Collections.reverse(sortedSeconds);
+
+        for (int seconds : sortedSeconds) {
+            int finalSeconds = seconds;
+            Bukkit.getScheduler().runTaskLater(this, () -> {
+                broadcastCountdown(finalSeconds);
+                if (finalSeconds == 0) {
+                    performCleanup();
+                }
+            }, seconds * 20L);
+        }
+    }
+
+    private void broadcastCountdown(int seconds) {
+        String message = countdownTips.get(seconds);
+        if (message != null && !message.isEmpty()) {
+            Bukkit.broadcastMessage(message);
+        }
+    }
+
+    private void performCleanup() {
         int clearedItems = 0;
         synchronized (trashLock) {
             clearedItems = globalTrashItems.size();
             globalTrashItems.clear();
         }
 
-        Bukkit.broadcastMessage(clearTip);
-        Bukkit.getConsoleSender().sendMessage(ChatColor.YELLOW + "[XLRTrash] 已清除全服垃圾桶中的 " + clearedItems + " 个物品");
+        isCountingDown = false;
+        closeAllGlobalTrashInventories();
+    }
+
+    private void closeAllGlobalTrashInventories() {
+        for (Player player : new HashSet<>(globalTrashInventories.keySet())) {
+            if (player != null && player.isOnline()) {
+                Inventory inv = globalTrashInventories.get(player);
+                if (inv != null && player.getOpenInventory().getTopInventory().equals(inv)) {
+                    player.closeInventory();
+                }
+            }
+        }
+        globalTrashInventories.clear();
+        playerPage.clear();
     }
 
     private void loadConfig() {
@@ -99,8 +140,20 @@ public final class Shan extends JavaPlugin implements Listener {
         nextPageName = color(getConfig().getString("GlobalTrash.Page1Next.name", "&a下一页"));
         prevPageName = color(getConfig().getString("GlobalTrash2.Back.name", "&a上一页"));
         transferTip = color(getConfig().getString("TrashTip", "&a物品已转移到全服垃圾桶！"));
-        clearTip = color(getConfig().getString("ClearTip", "&c[全服垃圾桶] 垃圾桶已定期清理！"));
+        clearTrashDisabledTip = color(getConfig().getString("ClearTrashDisabledTip", "&a倒计时结束前无法打开垃圾桶"));
+        clearTrashDisabled = getConfig().getBoolean("ClearTrashDisabled", true);
         clearInterval = getConfig().getInt("ClearInterval", 5);
+
+        countdownTips = new HashMap<>();
+        if (getConfig().getConfigurationSection("ClearTip") != null) {
+            for (String key : getConfig().getConfigurationSection("ClearTip").getKeys(false)) {
+                try {
+                    int seconds = Integer.parseInt(key);
+                    countdownTips.put(seconds, color(getConfig().getString("ClearTip." + key)));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
     }
 
     private String color(String text) {
@@ -108,6 +161,11 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private void openPersonalTrash(Player player) {
+        if (clearTrashDisabled && isCountingDown) {
+            player.sendMessage(clearTrashDisabledTip);
+            return;
+        }
+
         Inventory inv = Bukkit.createInventory(null, SIZE, personalTrashTitle);
 
         for (int row = 0; row < ROWS; row++) {
@@ -149,11 +207,18 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
             }
 
+            int itemsOnPage = displayIndex;
+            boolean hasMoreItems = hasMoreItemsOnPage(page);
+
             if (page == 0) {
-                inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                if (itemsOnPage >= maxStoragePerPage || hasMoreItems) {
+                    inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                }
             } else {
                 inv.setItem(5 * 9 + 2, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
-                inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                if (itemsOnPage >= maxStoragePerPage || hasMoreItems) {
+                    inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                }
             }
         }
 
@@ -181,6 +246,21 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private int getMaxStoragePerPage() {
         return 4 * 7;
+    }
+
+    private boolean hasMoreItemsOnPage(int page) {
+        int startIndex = (page + 1) * getMaxStoragePerPage();
+        if (startIndex >= globalTrashItems.size()) {
+            return false;
+        }
+
+        for (int i = startIndex; i < globalTrashItems.size(); i++) {
+            ItemStack item = globalTrashItems.get(i);
+            if (item != null && item.getType() != Material.AIR) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ItemStack createBorderItem(Material material) {
@@ -251,9 +331,13 @@ public final class Shan extends JavaPlugin implements Listener {
                 if (col == 2 && currentPage > 0) {
                     openGlobalTrash(player, currentPage - 1);
                 } else if (col == 4 && currentPage == 0) {
-                    openGlobalTrash(player, currentPage + 1);
+                    if (hasMoreItemsOnPage(currentPage)) {
+                        openGlobalTrash(player, currentPage + 1);
+                    }
                 } else if (col == 6) {
-                    openGlobalTrash(player, currentPage + 1);
+                    if (hasMoreItemsOnPage(currentPage)) {
+                        openGlobalTrash(player, currentPage + 1);
+                    }
                 }
                 return;
             }
