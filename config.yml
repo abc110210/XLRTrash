@@ -1,0 +1,27 @@
+# 垃圾桶
+Trash:
+  name: "&a垃圾桶"
+# 全服垃圾桶首页
+GlobalTrash:
+  name: "&a全服垃圾桶"
+# 全服垃圾桶下一页按钮
+  Page1Next:
+    name: "&a下一页"
+    Lore:
+      - ""
+# 全服垃圾桶分页
+GlobalTrash2:
+  name: "&a全服垃圾桶"
+# 全服垃圾桶分页Gui的下一页按钮
+  Pager2Next:
+    name: "&a下一页"
+    Lore:
+      - ""
+# 全服垃圾桶分页Gui的上一页按钮
+  Back:
+    name: "&a上一页"
+    Lore:
+      - ""
+
+# 转移到垃圾桶提示
+TrashTip: "&a物品已转移到全服垃圾桶！"
