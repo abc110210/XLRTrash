@@ -80,52 +80,36 @@ public final class Shan extends JavaPlugin implements Listener {
         Inventory inv = Bukkit.createInventory(null, SIZE, GLOBAL_TRASH_TITLE);
 
         synchronized (trashLock) {
-            int itemIndex = 0;
+            int displayIndex = 0;
+            int maxStoragePerPage = getMaxStoragePerPage();
+
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < 9; col++) {
+                    int slot = row * 9 + col;
+
                     if (isBorder(row, col)) {
-                        inv.setItem(row * 9 + col, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
-                    } else if (isInnerStorage(row, col)) {
-                        int globalIndex = page * getMaxStoragePerPage() + itemIndex;
+                        inv.setItem(slot, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
+                    } else if (displayIndex < maxStoragePerPage) {
+                        int globalIndex = page * maxStoragePerPage + displayIndex;
                         if (globalIndex < globalTrashItems.size()) {
                             ItemStack item = globalTrashItems.get(globalIndex);
                             if (item != null && item.getType() != Material.AIR) {
-                                inv.setItem(row * 9 + col, item.clone());
-                                itemIndex++;
+                                inv.setItem(slot, item.clone());
                             }
                         }
+                        displayIndex++;
                     }
                 }
             }
-        }
 
-        int lastRow = 5;
-        if (page > 0) {
-            inv.setItem(lastRow * 9 + 3, createNavigationItem(Material.LAPIS_LAZULI, "§a上一页"));
-        }
-
-        int maxStoragePerPage = getMaxStoragePerPage();
-        int itemsOnCurrentPage = countItemsOnPage(page);
-        boolean hasNextPage = itemsOnCurrentPage >= maxStoragePerPage ||
-                             (page + 1) * maxStoragePerPage < globalTrashItems.size();
-        if (hasNextPage) {
-            inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
+            if (page > 0) {
+                inv.setItem(5 * 9 + 3, createNavigationItem(Material.LAPIS_LAZULI, "§a上一页"));
+            }
+            inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         }
 
         globalTrashInventories.put(player, inv);
         player.openInventory(inv);
-    }
-
-    private int countItemsOnPage(int page) {
-        int count = 0;
-        int startIndex = page * getMaxStoragePerPage();
-        for (int i = startIndex; i < globalTrashItems.size() && count < getMaxStoragePerPage(); i++) {
-            ItemStack item = globalTrashItems.get(i);
-            if (item != null && item.getType() != Material.AIR) {
-                count++;
-            }
-        }
-        return count;
     }
 
     private boolean isBorder(int row, int col) {
@@ -137,7 +121,7 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private boolean isNavigationSlot(int row, int col) {
-        return row == 5 && (col == 3 || col == 4);
+        return row == 5 && col >= 3 && col <= 4;
     }
 
     private int getStorageIndex(int row, int col, int page) {
@@ -213,10 +197,6 @@ public final class Shan extends JavaPlugin implements Listener {
             int row = slot / 9;
             int col = slot % 9;
 
-            if (isBorder(row, col)) {
-                return;
-            }
-
             if (isNavigationSlot(row, col)) {
                 int currentPage = playerPage.getOrDefault(player, 0);
                 if (col == 3 && currentPage > 0) {
@@ -224,15 +204,25 @@ public final class Shan extends JavaPlugin implements Listener {
                 } else if (col == 4) {
                     openGlobalTrash(player, currentPage + 1);
                 }
-            } else if (isInnerStorage(row, col)) {
+                return;
+            }
+
+            if (isBorder(row, col)) {
+                return;
+            }
+
+            if (isInnerStorage(row, col)) {
                 synchronized (trashLock) {
                     ItemStack clickedItem = event.getCurrentItem();
                     if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                        int itemIndex = findItemIndexOnPage(row, col, playerPage.getOrDefault(player, 0));
-                        if (itemIndex >= 0 && itemIndex < globalTrashItems.size()) {
-                            ItemStack item = globalTrashItems.get(itemIndex);
+                        int currentPage = playerPage.getOrDefault(player, 0);
+                        int slotOnPage = getSlotOnPage(row, col);
+                        int globalIndex = currentPage * getMaxStoragePerPage() + slotOnPage;
+
+                        if (globalIndex < globalTrashItems.size()) {
+                            ItemStack item = globalTrashItems.get(globalIndex);
                             if (item != null) {
-                                globalTrashItems.remove(itemIndex);
+                                globalTrashItems.remove(globalIndex);
                                 player.getInventory().addItem(clickedItem.clone());
                                 event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
                                 player.updateInventory();
@@ -244,25 +234,10 @@ public final class Shan extends JavaPlugin implements Listener {
         }
     }
 
-    private int findItemIndexOnPage(int row, int col, int page) {
+    private int getSlotOnPage(int row, int col) {
         int innerRow = row - 1;
         int innerCol = col - 1;
-        int slotOnPage = innerRow * 7 + innerCol;
-
-        int startIndex = page * getMaxStoragePerPage();
-        int count = 0;
-
-        for (int i = startIndex; i < globalTrashItems.size(); i++) {
-            ItemStack item = globalTrashItems.get(i);
-            if (item != null && item.getType() != Material.AIR) {
-                if (count == slotOnPage) {
-                    return i;
-                }
-                count++;
-            }
-        }
-
-        return -1;
+        return innerRow * 7 + innerCol;
     }
 
     @EventHandler
@@ -379,7 +354,12 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             List<ItemStack> mergedItems = mergeItemStacks(itemsToTransfer);
-            globalTrashItems.addAll(mergedItems);
+
+            for (ItemStack item : mergedItems) {
+                if (item != null && item.getType() != Material.AIR) {
+                    globalTrashItems.add(item);
+                }
+            }
         }
 
         personalTrashInventories.remove(player);
