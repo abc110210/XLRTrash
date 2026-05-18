@@ -195,20 +195,21 @@ public final class Shan extends JavaPlugin implements Listener {
         Inventory inv = Bukkit.createInventory(null, SIZE, globalTrashTitle);
         Map<Integer, Integer> slotToGlobalIndex = new HashMap<>();
 
-        // Clear old mapping to avoid using stale indices
-        slotGlobalIndexMap.remove(player);
-
         synchronized (trashLock) {
-            // Count total valid items
-            int totalItems = 0;
-            for (ItemStack item : globalTrashItems) {
+            // Collect all valid items first
+            List<ItemStack> validItems = new ArrayList<>();
+            List<Integer> validIndices = new ArrayList<>();
+
+            for (int i = 0; i < globalTrashItems.size(); i++) {
+                ItemStack item = globalTrashItems.get(i);
                 if (item != null && item.getType() != Material.AIR) {
-                    totalItems++;
+                    validItems.add(item);
+                    validIndices.add(i);
                 }
             }
 
             int maxStoragePerPage = getMaxStoragePerPage();
-            int logicalStartIndex = page * maxStoragePerPage;
+            int startIndex = page * maxStoragePerPage;
 
             // Fill all slots with borders first
             for (int row = 0; row < ROWS; row++) {
@@ -225,28 +226,21 @@ public final class Shan extends JavaPlugin implements Listener {
 
             for (int row = 1; row <= 4 && displaySlot < maxStoragePerPage; row++) {
                 for (int col = 1; col <= 7 && displaySlot < maxStoragePerPage; col++) {
-                    // Find the item for this display slot
-                    int targetLogicalIndex = logicalStartIndex + displaySlot;
-                    int currentLogicalIndex = 0;
+                    int itemIndex = startIndex + displaySlot;
+                    if (itemIndex < validItems.size()) {
+                        int slot = row * 9 + col;
+                        ItemStack item = validItems.get(itemIndex);
+                        int globalIndex = validIndices.get(itemIndex);
 
-                    for (int globalIndex = 0; globalIndex < globalTrashItems.size(); globalIndex++) {
-                        ItemStack item = globalTrashItems.get(globalIndex);
-                        if (item != null && item.getType() != Material.AIR) {
-                            if (currentLogicalIndex == targetLogicalIndex) {
-                                int slot = row * 9 + col;
-                                inv.setItem(slot, item.clone());
-                                slotToGlobalIndex.put(slot, globalIndex);
-                                displaySlot++;
-                                break;
-                            }
-                            currentLogicalIndex++;
-                        }
+                        inv.setItem(slot, item.clone());
+                        slotToGlobalIndex.put(slot, globalIndex);
+                        displaySlot++;
                     }
                 }
             }
 
             // Add navigation buttons
-            boolean hasMoreItems = totalItems > (page + 1) * maxStoragePerPage;
+            boolean hasMoreItems = validItems.size() > (page + 1) * maxStoragePerPage;
 
             if (page == 0) {
                 if (hasMoreItems) {
@@ -387,51 +381,53 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (isInnerStorage(row, col)) {
+                event.setCancelled(true);
+
                 ItemStack clickedItem = event.getCurrentItem();
                 if (clickedItem == null || clickedItem.getType() == Material.AIR) {
-                    event.setCancelled(true);
                     return;
                 }
 
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
-                    event.setCancelled(true);
                     return;
                 }
 
                 Integer globalIndex = slotMap.get(slot);
                 if (globalIndex == null) {
-                    event.setCancelled(true);
                     return;
                 }
 
                 synchronized (trashLock) {
+                    // Validate index still exists
                     if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
                         ItemStack item = globalTrashItems.get(globalIndex);
                         if (item != null && item.getType() != Material.AIR) {
-                            // Remove the item from list
-                            globalTrashItems.remove(globalIndex);
+                            // Double-check it's the same item
+                            if (item.isSimilar(clickedItem)) {
+                                // Remove from list
+                                globalTrashItems.remove(globalIndex);
 
-                            // Clear the mapping to prevent reuse
-                            slotGlobalIndexMap.remove(player);
+                                // Clear mapping immediately
+                                slotGlobalIndexMap.remove(player);
 
-                            // Close the inventory immediately
-                            player.closeInventory();
+                                // Give to player
+                                player.getInventory().addItem(clickedItem.clone());
+
+                                // Refresh GUI
+                                int currentPage = playerPage.getOrDefault(player, 0);
+                                openGlobalTrash(player, currentPage);
+                                return;
+                            }
                         }
                     }
                 }
 
-                // Cancel the event AFTER closing inventory
-                event.setCancelled(true);
-
-                // Give items to player outside synchronized block
-                player.getInventory().addItem(clickedItem.clone());
-
-                // Reopen the GUI with updated items
-                Bukkit.getScheduler().runTaskLater(this, () -> {
-                    int currentPage = playerPage.getOrDefault(player, 0);
-                    openGlobalTrash(player, currentPage);
-                }, 1L);
+                // If we get here, the item was already removed or doesn't exist
+                player.sendMessage("§c物品不存在，正在刷新界面...");
+                slotGlobalIndexMap.remove(player);
+                int currentPage = playerPage.getOrDefault(player, 0);
+                openGlobalTrash(player, currentPage);
             }
         }
     }
