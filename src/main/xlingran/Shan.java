@@ -101,9 +101,10 @@ public final class Shan extends JavaPlugin implements Listener {
         if (page > 0) {
             inv.setItem(lastRow * 9 + 3, createNavigationItem(Material.LAPIS_LAZULI, "§a上一页"));
         }
-        if ((page + 1) * getMaxStoragePerPage() < globalTrashItems.size() || shouldShowNextPage(page)) {
-            inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
-        } else if (page == 0) {
+
+        int maxStoragePerPage = getMaxStoragePerPage();
+        boolean hasNextPage = (page + 1) * maxStoragePerPage < globalTrashItems.size();
+        if (hasNextPage) {
             inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         }
 
@@ -131,16 +132,6 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private int getMaxStoragePerPage() {
         return 4 * 7;
-    }
-
-    private boolean shouldShowNextPage(int page) {
-        int startIndex = page * getMaxStoragePerPage();
-        for (int i = startIndex; i < startIndex + getMaxStoragePerPage(); i++) {
-            if (i < globalTrashItems.size() && globalTrashItems.get(i) != null) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private ItemStack createBorderItem(Material material) {
