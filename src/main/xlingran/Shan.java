@@ -44,6 +44,7 @@ public final class Shan extends JavaPlugin implements Listener {
     private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
     private final Map<Player, Map<Integer, Integer>> slotGlobalIndexMap = new HashMap<>();
+    private final Map<String, Long> clickCooldowns = new HashMap<>(); // 防抖机制
     private final Object trashLock = new Object();
     private int cleanupTaskId = -1;
 
@@ -381,6 +382,16 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (isInnerStorage(row, col)) {
+                // 防抖检查：防止同一槽位被快速重复点击
+                String clickKey = player.getName() + "_" + slot;
+                long currentTime = System.currentTimeMillis();
+                Long lastClickTime = clickCooldowns.get(clickKey);
+                
+                if (lastClickTime != null && (currentTime - lastClickTime) < 500) {
+                    // 500ms 内的重复点击，忽略
+                    return;
+                }
+                
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
                     return;
@@ -391,21 +402,39 @@ public final class Shan extends JavaPlugin implements Listener {
                     return;
                 }
 
+                // 更新点击时间
+                clickCooldowns.put(clickKey, currentTime);
+
                 synchronized (trashLock) {
-                    // Validate index still exists
+                    // 二次验证：检查索引是否仍然有效
                     if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
                         ItemStack itemInList = globalTrashItems.get(globalIndex);
                         if (itemInList != null && itemInList.getType() != Material.AIR) {
-                            // Remove from list first
+                            // 再次验证映射关系是否仍然有效（防止并发问题）
+                            Map<Integer, Integer> currentSlotMap = slotGlobalIndexMap.get(player);
+                            if (currentSlotMap == null || !currentSlotMap.containsKey(slot)) {
+                                return; // 映射已被清除，说明物品已被处理
+                            }
+                            
+                            Integer currentIndex = currentSlotMap.get(slot);
+                            if (currentIndex == null || !currentIndex.equals(globalIndex)) {
+                                return; // 索引已变化，说明物品已被处理
+                            }
+                            
+                            // 通过所有验证，执行取出操作
+                            // 1. 先从列表中移除物品
                             globalTrashItems.remove(globalIndex);
 
-                            // Clear mapping immediately
+                            // 2. 立即清除映射，防止重复点击
                             slotGlobalIndexMap.remove(player);
+                            
+                            // 3. 清理防抖记录
+                            clickCooldowns.remove(clickKey);
 
-                            // Give the entire stack to player
+                            // 4. 给玩家物品
                             player.getInventory().addItem(itemInList.clone());
 
-                            // Refresh GUI
+                            // 5. 刷新 GUI
                             int currentPage = playerPage.getOrDefault(player, 0);
                             openGlobalTrash(player, currentPage);
                             return;
@@ -413,7 +442,8 @@ public final class Shan extends JavaPlugin implements Listener {
                     }
                 }
 
-                // If we get here, the item was already removed or doesn't exist
+                // 如果执行到这里，说明物品已被其他操作处理
+                clickCooldowns.remove(clickKey);
                 player.sendMessage("§c物品不存在，正在刷新界面...");
                 slotGlobalIndexMap.remove(player);
                 int currentPage = playerPage.getOrDefault(player, 0);
