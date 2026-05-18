@@ -472,40 +472,40 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private List<ItemStack> mergeItemStacks(List<ItemStack> items) {
         List<ItemStack> merged = new ArrayList<>();
-        Map<String, ItemStack> typeMap = new HashMap<>();
 
         for (ItemStack item : items) {
             if (item == null || item.getType() == Material.AIR) {
                 continue;
             }
 
-            String key = getItemKey(item);
-            ItemStack existing = typeMap.get(key);
+            // 如果当前物品数量已经可以整组存放，直接添加
+            int maxStackSize = item.getMaxStackSize();
+            int remainingAmount = item.getAmount();
 
-            if (existing != null) {
-                int newAmount = existing.getAmount() + item.getAmount();
-                int maxStackSize = item.getMaxStackSize();
-
-                if (newAmount <= maxStackSize) {
-                    existing.setAmount(newAmount);
-                } else {
-                    existing.setAmount(maxStackSize);
-                    ItemStack remaining = item.clone();
-                    remaining.setAmount(newAmount - maxStackSize);
-                    String remainingKey = getItemKey(remaining);
-                    ItemStack existingRemaining = typeMap.get(remainingKey);
-                    if (existingRemaining != null) {
-                        existingRemaining.setAmount(existingRemaining.getAmount() + remaining.getAmount());
-                    } else {
-                        typeMap.put(remainingKey, remaining);
+            while (remainingAmount > 0) {
+                // 尝试找到可以合并的现有物品
+                boolean mergedItem = false;
+                for (int i = 0; i < merged.size(); i++) {
+                    ItemStack existing = merged.get(i);
+                    if (existing.isSimilar(item) && existing.getAmount() < maxStackSize) {
+                        int canAdd = Math.min(remainingAmount, maxStackSize - existing.getAmount());
+                        existing.setAmount(existing.getAmount() + canAdd);
+                        remainingAmount -= canAdd;
+                        mergedItem = true;
+                        break;
                     }
                 }
-            } else {
-                typeMap.put(key, item.clone());
+
+                // 如果没有找到可以合并的物品，创建新的
+                if (!mergedItem && remainingAmount > 0) {
+                    ItemStack newItem = item.clone();
+                    newItem.setAmount(Math.min(remainingAmount, maxStackSize));
+                    merged.add(newItem);
+                    remainingAmount -= newItem.getAmount();
+                }
             }
         }
 
-        merged.addAll(typeMap.values());
         return merged;
     }
 
