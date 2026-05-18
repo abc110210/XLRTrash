@@ -23,10 +23,14 @@ import java.util.Map;
 
 public final class Shan extends JavaPlugin implements Listener {
 
-    private static final String PERSONAL_TRASH_TITLE = "§a垃圾桶";
-    private static final String GLOBAL_TRASH_TITLE = "§a全服垃圾桶";
     private static final int ROWS = 6;
     private static final int SIZE = ROWS * 9;
+
+    private String personalTrashTitle;
+    private String globalTrashTitle;
+    private String nextPageName;
+    private String prevPageName;
+    private String transferTip;
 
     private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
@@ -36,6 +40,9 @@ public final class Shan extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {
+        saveDefaultConfig();
+        loadConfig();
+
         getServer().getPluginManager().registerEvents(this, this);
 
         getCommand("xlrtrash").setExecutor((sender, command, label, args) -> {
@@ -55,13 +62,25 @@ public final class Shan extends JavaPlugin implements Listener {
         Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
     }
 
+    private void loadConfig() {
+        personalTrashTitle = color(getConfig().getString("Trash.name", "&a垃圾桶"));
+        globalTrashTitle = color(getConfig().getString("GlobalTrash.name", "&a全服垃圾桶"));
+        nextPageName = color(getConfig().getString("GlobalTrash.Page1Next.name", "&a下一页"));
+        prevPageName = color(getConfig().getString("GlobalTrash2.Back.name", "&a上一页"));
+        transferTip = color(getConfig().getString("TrashTip", "&a物品已转移到全服垃圾桶！"));
+    }
+
+    private String color(String text) {
+        return ChatColor.translateAlternateColorCodes('&', text);
+    }
+
     @Override
     public void onDisable() {
         Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄寄の家插件!");
     }
 
     private void openPersonalTrash(Player player) {
-        Inventory inv = Bukkit.createInventory(null, SIZE, PERSONAL_TRASH_TITLE);
+        Inventory inv = Bukkit.createInventory(null, SIZE, personalTrashTitle);
 
         for (int row = 0; row < ROWS; row++) {
             for (int col = 0; col < 9; col++) {
@@ -77,7 +96,7 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private void openGlobalTrash(Player player, int page) {
         playerPage.put(player, page);
-        Inventory inv = Bukkit.createInventory(null, SIZE, GLOBAL_TRASH_TITLE);
+        Inventory inv = Bukkit.createInventory(null, SIZE, globalTrashTitle);
 
         synchronized (trashLock) {
             int displayIndex = 0;
@@ -103,9 +122,9 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (page > 0) {
-                inv.setItem(5 * 9 + 3, createNavigationItem(Material.LAPIS_LAZULI, "§a上一页"));
+                inv.setItem(5 * 9 + 2, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
             }
-            inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
+            inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
         }
 
         globalTrashInventories.put(player, inv);
@@ -121,7 +140,7 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private boolean isNavigationSlot(int row, int col) {
-        return row == 5 && col >= 3 && col <= 4;
+        return row == 5 && (col == 2 || col == 6);
     }
 
     private int getStorageIndex(int row, int col, int page) {
@@ -157,7 +176,7 @@ public final class Shan extends JavaPlugin implements Listener {
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         String title = event.getView().getTitle();
-        if (!title.equals(PERSONAL_TRASH_TITLE) && !title.equals(GLOBAL_TRASH_TITLE)) {
+        if (!title.equals(personalTrashTitle) && !title.equals(globalTrashTitle)) {
             return;
         }
 
@@ -168,7 +187,7 @@ public final class Shan extends JavaPlugin implements Listener {
         Player player = (Player) event.getWhoClicked();
         int slot = event.getSlot();
 
-        if (title.equals(PERSONAL_TRASH_TITLE)) {
+        if (title.equals(personalTrashTitle)) {
             Inventory clickedInv = event.getClickedInventory();
             if (clickedInv == null) return;
 
@@ -186,7 +205,7 @@ public final class Shan extends JavaPlugin implements Listener {
             }
         }
 
-        if (title.equals(GLOBAL_TRASH_TITLE)) {
+        if (title.equals(globalTrashTitle)) {
             event.setCancelled(true);
 
             Inventory clickedInv = event.getClickedInventory();
@@ -199,9 +218,9 @@ public final class Shan extends JavaPlugin implements Listener {
 
             if (isNavigationSlot(row, col)) {
                 int currentPage = playerPage.getOrDefault(player, 0);
-                if (col == 3 && currentPage > 0) {
+                if (col == 2 && currentPage > 0) {
                     openGlobalTrash(player, currentPage - 1);
-                } else if (col == 4) {
+                } else if (col == 6) {
                     openGlobalTrash(player, currentPage + 1);
                 }
                 return;
@@ -243,7 +262,7 @@ public final class Shan extends JavaPlugin implements Listener {
     @EventHandler
     public void onInventoryDrag(InventoryDragEvent event) {
         String title = event.getView().getTitle();
-        if (title.equals(GLOBAL_TRASH_TITLE)) {
+        if (title.equals(globalTrashTitle)) {
             event.setCancelled(true);
         }
     }
@@ -319,6 +338,9 @@ public final class Shan extends JavaPlugin implements Listener {
                         key.append("|damage:").append(damageable.getDamage());
                     }
                 }
+                if (meta.hasCustomModelData()) {
+                    key.append("|cmd:").append(meta.getCustomModelData());
+                }
             }
         }
 
@@ -332,7 +354,7 @@ public final class Shan extends JavaPlugin implements Listener {
         }
 
         String title = event.getView().getTitle();
-        if (!title.equals(PERSONAL_TRASH_TITLE)) {
+        if (!title.equals(personalTrashTitle)) {
             return;
         }
 
@@ -363,6 +385,6 @@ public final class Shan extends JavaPlugin implements Listener {
         }
 
         personalTrashInventories.remove(player);
-        player.sendMessage(ChatColor.GREEN + "物品已转移到全服垃圾桶！");
+        player.sendMessage(transferTip);
     }
 }
