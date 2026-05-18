@@ -193,8 +193,22 @@ public final class Shan extends JavaPlugin implements Listener {
         Inventory inv = Bukkit.createInventory(null, SIZE, globalTrashTitle);
         Map<Integer, Integer> slotToGlobalIndex = new HashMap<>();
 
+        // Clear old mapping to avoid using stale indices
+        slotGlobalIndexMap.remove(player);
+
         synchronized (trashLock) {
-            // Add borders first
+            // Count total valid items
+            int totalItems = 0;
+            for (ItemStack item : globalTrashItems) {
+                if (item != null && item.getType() != Material.AIR) {
+                    totalItems++;
+                }
+            }
+
+            int maxStoragePerPage = getMaxStoragePerPage();
+            int logicalStartIndex = page * maxStoragePerPage;
+
+            // Fill all slots with borders first
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < 9; col++) {
                     int slot = row * 9 + col;
@@ -204,34 +218,33 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
             }
 
-            int maxStoragePerPage = getMaxStoragePerPage();
-            int logicalStartIndex = page * maxStoragePerPage;
-            int logicalCount = 0;
+            // Fill items in inner storage
             int displaySlot = 0;
 
-            // Fill inner storage slots with items
-            for (int globalIndex = 0; globalIndex < globalTrashItems.size() && displaySlot < maxStoragePerPage; globalIndex++) {
-                ItemStack item = globalTrashItems.get(globalIndex);
-                if (item != null && item.getType() != Material.AIR) {
-                    if (logicalCount >= logicalStartIndex) {
-                        // Calculate row and col for this display position
-                        int slotOnPage = displaySlot;
-                        int innerRow = slotOnPage / 7;
-                        int innerCol = slotOnPage % 7;
-                        int row = innerRow + 1;
-                        int col = innerCol + 1;
-                        int slot = row * 9 + col;
+            for (int row = 1; row <= 4 && displaySlot < maxStoragePerPage; row++) {
+                for (int col = 1; col <= 7 && displaySlot < maxStoragePerPage; col++) {
+                    // Find the item for this display slot
+                    int targetLogicalIndex = logicalStartIndex + displaySlot;
+                    int currentLogicalIndex = 0;
 
-                        inv.setItem(slot, item.clone());
-                        slotToGlobalIndex.put(slot, globalIndex);
-                        displaySlot++;
+                    for (int globalIndex = 0; globalIndex < globalTrashItems.size(); globalIndex++) {
+                        ItemStack item = globalTrashItems.get(globalIndex);
+                        if (item != null && item.getType() != Material.AIR) {
+                            if (currentLogicalIndex == targetLogicalIndex) {
+                                int slot = row * 9 + col;
+                                inv.setItem(slot, item.clone());
+                                slotToGlobalIndex.put(slot, globalIndex);
+                                displaySlot++;
+                                break;
+                            }
+                            currentLogicalIndex++;
+                        }
                     }
-                    logicalCount++;
                 }
             }
 
             // Add navigation buttons
-            boolean hasMoreItems = logicalCount > (page + 1) * maxStoragePerPage;
+            boolean hasMoreItems = totalItems > (page + 1) * maxStoragePerPage;
 
             if (page == 0) {
                 if (hasMoreItems) {
@@ -373,24 +386,35 @@ public final class Shan extends JavaPlugin implements Listener {
 
             if (isInnerStorage(row, col)) {
                 event.setCancelled(true);
+
+                ItemStack clickedItem = event.getCurrentItem();
+                if (clickedItem == null || clickedItem.getType() == Material.AIR) {
+                    return;
+                }
+
+                Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
+                if (slotMap == null) {
+                    return;
+                }
+
+                Integer globalIndex = slotMap.get(slot);
+                if (globalIndex == null) {
+                    return;
+                }
+
                 synchronized (trashLock) {
-                    ItemStack clickedItem = event.getCurrentItem();
-                    if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                        Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
-                        if (slotMap != null) {
-                            Integer globalIndex = slotMap.get(slot);
-                            if (globalIndex != null && globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
-                                ItemStack item = globalTrashItems.get(globalIndex);
-                                if (item != null) {
-                                    globalTrashItems.remove(globalIndex);
-                                    player.getInventory().addItem(clickedItem.clone());
-                                }
-                            }
+                    if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
+                        ItemStack item = globalTrashItems.get(globalIndex);
+                        if (item != null && item.getType() != Material.AIR) {
+                            globalTrashItems.remove(globalIndex);
+                            player.getInventory().addItem(clickedItem.clone());
                         }
-                        int currentPage = playerPage.getOrDefault(player, 0);
-                        openGlobalTrash(player, currentPage);
                     }
                 }
+
+                // Refresh GUI outside synchronized block
+                int currentPage = playerPage.getOrDefault(player, 0);
+                openGlobalTrash(player, currentPage);
             }
         }
     }
