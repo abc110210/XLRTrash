@@ -11,9 +11,11 @@ import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.Damageable;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.ArrayList;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -28,6 +30,7 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
+    private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
     private final Object trashLock = new Object();
 
@@ -35,14 +38,14 @@ public final class Shan extends JavaPlugin implements Listener {
     public void onEnable() {
         getServer().getPluginManager().registerEvents(this, this);
 
-        getCommand("trash").setExecutor((sender, command, label, args) -> {
+        getCommand("xlrtrash").setExecutor((sender, command, label, args) -> {
             if (sender instanceof Player) {
                 openPersonalTrash((Player) sender);
             }
             return true;
         });
 
-        getCommand("globaltrash").setExecutor((sender, command, label, args) -> {
+        getCommand("xlrglobaltrash").setExecutor((sender, command, label, args) -> {
             if (sender instanceof Player) {
                 openGlobalTrash((Player) sender, 0);
             }
@@ -104,6 +107,7 @@ public final class Shan extends JavaPlugin implements Listener {
             inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         }
 
+        globalTrashInventories.put(player, inv);
         player.openInventory(inv);
     }
 
@@ -172,18 +176,35 @@ public final class Shan extends JavaPlugin implements Listener {
 
         Player player = (Player) event.getWhoClicked();
         int slot = event.getSlot();
-        int row = slot / 9;
-        int col = slot % 9;
 
         if (title.equals(PERSONAL_TRASH_TITLE)) {
-            if (isBorder(row, col)) {
+            Inventory clickedInv = event.getClickedInventory();
+            if (clickedInv == null) return;
+
+            boolean isTrashInv = personalTrashInventories.get(player) == clickedInv;
+            int row = slot / 9;
+            int col = slot % 9;
+
+            if (isTrashInv && isBorder(row, col)) {
                 event.setCancelled(true);
+                return;
             }
-            return;
+
+            if (!isTrashInv) {
+                return;
+            }
         }
 
         if (title.equals(GLOBAL_TRASH_TITLE)) {
             event.setCancelled(true);
+
+            Inventory clickedInv = event.getClickedInventory();
+            if (clickedInv == null || globalTrashInventories.get(player) != clickedInv) {
+                return;
+            }
+
+            int row = slot / 9;
+            int col = slot % 9;
 
             if (isBorder(row, col)) {
                 return;
@@ -224,6 +245,77 @@ public final class Shan extends JavaPlugin implements Listener {
         }
     }
 
+    private List<ItemStack> mergeItemStacks(List<ItemStack> items) {
+        List<ItemStack> merged = new ArrayList<>();
+        Map<String, ItemStack> typeMap = new HashMap<>();
+
+        for (ItemStack item : items) {
+            if (item == null || item.getType() == Material.AIR) {
+                continue;
+            }
+
+            String key = getItemKey(item);
+            ItemStack existing = typeMap.get(key);
+
+            if (existing != null) {
+                int newAmount = existing.getAmount() + item.getAmount();
+                int maxStackSize = item.getMaxStackSize();
+
+                if (newAmount <= maxStackSize) {
+                    existing.setAmount(newAmount);
+                } else {
+                    existing.setAmount(maxStackSize);
+                    ItemStack remaining = item.clone();
+                    remaining.setAmount(newAmount - maxStackSize);
+                    merged.add(remaining);
+                }
+            } else {
+                typeMap.put(key, item.clone());
+                merged.add(item.clone());
+            }
+        }
+
+        return merged;
+    }
+
+    private String getItemKey(ItemStack item) {
+        if (item == null || item.getType() == Material.AIR) {
+            return "";
+        }
+
+        StringBuilder key = new StringBuilder();
+        key.append(item.getType().name());
+
+        if (item.hasItemMeta()) {
+            ItemMeta meta = item.getItemMeta();
+            if (meta != null) {
+                if (meta.hasDisplayName()) {
+                    key.append("|name:").append(meta.getDisplayName());
+                }
+                if (meta.hasLore()) {
+                    key.append("|lore:").append(String.join(",", meta.getLore()));
+                }
+                if (meta.hasEnchants()) {
+                    key.append("|ench:");
+                    meta.getEnchants().forEach((ench, level) -> {
+                        key.append(ench.getKey().getKey()).append(":").append(level).append(";");
+                    });
+                }
+                if (meta.isUnbreakable()) {
+                    key.append("|unbreakable");
+                }
+                if (meta instanceof Damageable) {
+                    Damageable damageable = (Damageable) meta;
+                    if (damageable.hasDamage()) {
+                        key.append("|damage:").append(damageable.getDamage());
+                    }
+                }
+            }
+        }
+
+        return key.toString();
+    }
+
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
         if (!(event.getPlayer() instanceof Player)) {
@@ -239,16 +331,21 @@ public final class Shan extends JavaPlugin implements Listener {
         Inventory inv = event.getInventory();
 
         synchronized (trashLock) {
+            List<ItemStack> itemsToTransfer = new ArrayList<>();
+
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < 9; col++) {
                     if (!isBorder(row, col)) {
                         ItemStack item = inv.getItem(row * 9 + col);
                         if (item != null && item.getType() != Material.AIR) {
-                            globalTrashItems.add(item.clone());
+                            itemsToTransfer.add(item.clone());
                         }
                     }
                 }
             }
+
+            List<ItemStack> mergedItems = mergeItemStacks(itemsToTransfer);
+            globalTrashItems.addAll(mergedItems);
         }
 
         personalTrashInventories.remove(player);
