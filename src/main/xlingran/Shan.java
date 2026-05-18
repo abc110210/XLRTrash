@@ -381,13 +381,6 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             if (isInnerStorage(row, col)) {
-                event.setCancelled(true);
-
-                ItemStack clickedItem = event.getCurrentItem();
-                if (clickedItem == null || clickedItem.getType() == Material.AIR) {
-                    return;
-                }
-
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
                 if (slotMap == null) {
                     return;
@@ -401,24 +394,21 @@ public final class Shan extends JavaPlugin implements Listener {
                 synchronized (trashLock) {
                     // Validate index still exists
                     if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
-                        ItemStack item = globalTrashItems.get(globalIndex);
-                        if (item != null && item.getType() != Material.AIR) {
-                            // Double-check it's the same item
-                            if (item.isSimilar(clickedItem)) {
-                                // Remove from list
-                                globalTrashItems.remove(globalIndex);
+                        ItemStack itemInList = globalTrashItems.get(globalIndex);
+                        if (itemInList != null && itemInList.getType() != Material.AIR) {
+                            // Remove from list first
+                            globalTrashItems.remove(globalIndex);
 
-                                // Clear mapping immediately
-                                slotGlobalIndexMap.remove(player);
+                            // Clear mapping immediately
+                            slotGlobalIndexMap.remove(player);
 
-                                // Give to player
-                                player.getInventory().addItem(clickedItem.clone());
+                            // Give the entire stack to player
+                            player.getInventory().addItem(itemInList.clone());
 
-                                // Refresh GUI
-                                int currentPage = playerPage.getOrDefault(player, 0);
-                                openGlobalTrash(player, currentPage);
-                                return;
-                            }
+                            // Refresh GUI
+                            int currentPage = playerPage.getOrDefault(player, 0);
+                            openGlobalTrash(player, currentPage);
+                            return;
                         }
                     }
                 }
