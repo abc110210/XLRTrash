@@ -578,11 +578,34 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
             }
 
+            // 先合并本次放入的物品
             List<ItemStack> mergedItems = mergeItemStacks(itemsToTransfer);
 
-            for (ItemStack item : mergedItems) {
-                if (item != null && item.getType() != Material.AIR) {
-                    globalTrashItems.add(item);
+            // 再合并到 globalTrashItems 中已有的相同物品
+            for (ItemStack newItem : mergedItems) {
+                if (newItem != null && newItem.getType() != Material.AIR) {
+                    int maxStackSize = newItem.getMaxStackSize();
+                    int remainingAmount = newItem.getAmount();
+
+                    // 尝试合并到现有物品
+                    for (ItemStack existingItem : globalTrashItems) {
+                        if (existingItem != null && existingItem.isSimilar(newItem) && existingItem.getAmount() < maxStackSize) {
+                            int canAdd = Math.min(remainingAmount, maxStackSize - existingItem.getAmount());
+                            existingItem.setAmount(existingItem.getAmount() + canAdd);
+                            remainingAmount -= canAdd;
+                            
+                            if (remainingAmount == 0) {
+                                break; // 完全合并，不需要添加新物品
+                            }
+                        }
+                    }
+
+                    // 如果还有剩余，添加新的 ItemStack
+                    if (remainingAmount > 0) {
+                        ItemStack remainingItem = newItem.clone();
+                        remainingItem.setAmount(remainingAmount);
+                        globalTrashItems.add(remainingItem);
+                    }
                 }
             }
         }
