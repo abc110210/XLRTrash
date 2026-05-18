@@ -18,7 +18,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,7 +38,7 @@ public final class Shan extends JavaPlugin implements Listener {
     private int clearInterval;
     private volatile boolean isCountingDown = false;
 
-    private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
+    private final List<ItemStack> globalTrashItems = new ArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
     private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
@@ -192,6 +191,11 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private void openGlobalTrash(Player player, int page) {
+        // 关键：先关闭旧的 GUI，确保客户端清理缓存
+        if (player.getOpenInventory().getTitle().equals(globalTrashTitle)) {
+            player.closeInventory();
+        }
+        
         playerPage.put(player, page);
         Inventory inv = Bukkit.createInventory(null, SIZE, globalTrashTitle);
         Map<Integer, Integer> slotToGlobalIndex = new HashMap<>();
@@ -388,7 +392,6 @@ public final class Shan extends JavaPlugin implements Listener {
                 Long lastClickTime = clickCooldowns.get(clickKey);
                 
                 if (lastClickTime != null && (currentTime - lastClickTime) < 500) {
-                    // 500ms 内的重复点击，忽略
                     return;
                 }
                 
@@ -402,52 +405,59 @@ public final class Shan extends JavaPlugin implements Listener {
                     return;
                 }
 
-                // 更新点击时间
+                // 记录点击时间
                 clickCooldowns.put(clickKey, currentTime);
 
+                // 关键：所有数据操作必须在同步块内原子执行
+                ItemStack itemToGive = null;
+                boolean shouldRemove = false;
+                
                 synchronized (trashLock) {
-                    // 二次验证：检查索引是否仍然有效
-                    if (globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
+                    // 验证：索引是否合法
+                    if (globalIndex < 0 || globalIndex >= globalTrashItems.size()) {
+                        clickCooldowns.remove(clickKey);
+                        shouldRemove = false;
+                    } else {
                         ItemStack itemInList = globalTrashItems.get(globalIndex);
-                        if (itemInList != null && itemInList.getType() != Material.AIR) {
-                            // 再次验证映射关系是否仍然有效（防止并发问题）
-                            Map<Integer, Integer> currentSlotMap = slotGlobalIndexMap.get(player);
-                            if (currentSlotMap == null || !currentSlotMap.containsKey(slot)) {
-                                return; // 映射已被清除，说明物品已被处理
-                            }
-                            
-                            Integer currentIndex = currentSlotMap.get(slot);
-                            if (currentIndex == null || !currentIndex.equals(globalIndex)) {
-                                return; // 索引已变化，说明物品已被处理
-                            }
-                            
-                            // 通过所有验证，执行取出操作
-                            // 1. 先从列表中移除物品
-                            globalTrashItems.remove(globalIndex);
-
-                            // 2. 立即清除映射，防止重复点击
-                            slotGlobalIndexMap.remove(player);
-                            
-                            // 3. 清理防抖记录
+                        if (itemInList == null || itemInList.getType() == Material.AIR) {
+                            // 空物品
                             clickCooldowns.remove(clickKey);
-
-                            // 4. 给玩家物品
-                            player.getInventory().addItem(itemInList.clone());
-
-                            // 5. 刷新 GUI
-                            int currentPage = playerPage.getOrDefault(player, 0);
-                            openGlobalTrash(player, currentPage);
-                            return;
+                            shouldRemove = false;
+                        } else {
+                            // 步骤1：先克隆物品给玩家
+                            itemToGive = itemInList.clone();
+                            
+                            // 步骤2：使用 int 索引删除（关键修复）
+                            // 确保调用 remove(int) 而不是 remove(Object)
+                            int indexToRemove = globalIndex.intValue();
+                            // 注意：remove(int) 返回的是被移除的元素，不是 boolean
+                            globalTrashItems.remove(indexToRemove);
+                            
+                            // 步骤3：清除映射和防抖
+                            slotGlobalIndexMap.remove(player);
+                            clickCooldowns.remove(clickKey);
+                            shouldRemove = true; // 删除操作已执行
                         }
                     }
                 }
 
-                // 如果执行到这里，说明物品已被其他操作处理
-                clickCooldowns.remove(clickKey);
-                player.sendMessage("§c物品不存在，正在刷新界面...");
-                slotGlobalIndexMap.remove(player);
-                int currentPage = playerPage.getOrDefault(player, 0);
-                openGlobalTrash(player, currentPage);
+                // 同步块外执行所有 Bukkit API 操作
+                if (shouldRemove && itemToGive != null) {
+                    // 给玩家物品
+                    player.getInventory().addItem(itemToGive);
+                    
+                    // 立即刷新 GUI（1 tick 延迟确保客户端同步）
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        int currentPage = playerPage.getOrDefault(player, 0);
+                        openGlobalTrash(player, currentPage);
+                    });
+                } else if (!shouldRemove) {
+                    // 物品已被其他操作处理，刷新界面
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        int currentPage = playerPage.getOrDefault(player, 0);
+                        openGlobalTrash(player, currentPage);
+                    });
+                }
             }
         }
     }
