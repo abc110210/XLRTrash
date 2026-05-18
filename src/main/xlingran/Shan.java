@@ -43,6 +43,7 @@ public final class Shan extends JavaPlugin implements Listener {
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
     private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
+    private final Map<Player, Map<Integer, Integer>> slotGlobalIndexMap = new HashMap<>();
     private final Object trashLock = new Object();
     private int cleanupTaskId = -1;
 
@@ -183,46 +184,62 @@ public final class Shan extends JavaPlugin implements Listener {
     private void openGlobalTrash(Player player, int page) {
         playerPage.put(player, page);
         Inventory inv = Bukkit.createInventory(null, SIZE, globalTrashTitle);
+        Map<Integer, Integer> slotToGlobalIndex = new HashMap<>();
 
         synchronized (trashLock) {
-            int displayIndex = 0;
             int maxStoragePerPage = getMaxStoragePerPage();
+            int logicalStartIndex = page * maxStoragePerPage;
+            int logicalCount = 0;
+            int displaySlot = 0;
 
+            // Fill inner storage slots with items
+            for (int globalIndex = 0; globalIndex < globalTrashItems.size() && displaySlot < maxStoragePerPage; globalIndex++) {
+                ItemStack item = globalTrashItems.get(globalIndex);
+                if (item != null && item.getType() != Material.AIR) {
+                    if (logicalCount >= logicalStartIndex) {
+                        // Calculate row and col for this display position
+                        int slotOnPage = displaySlot;
+                        int innerRow = slotOnPage / 7;
+                        int innerCol = slotOnPage % 7;
+                        int row = innerRow + 1;
+                        int col = innerCol + 1;
+                        int slot = row * 9 + col;
+
+                        inv.setItem(slot, item.clone());
+                        slotToGlobalIndex.put(slot, globalIndex);
+                        displaySlot++;
+                    }
+                    logicalCount++;
+                }
+            }
+
+            // Add borders
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < 9; col++) {
                     int slot = row * 9 + col;
-
                     if (isBorder(row, col)) {
                         inv.setItem(slot, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
-                    } else if (displayIndex < maxStoragePerPage) {
-                        int globalIndex = page * maxStoragePerPage + displayIndex;
-                        if (globalIndex < globalTrashItems.size()) {
-                            ItemStack item = globalTrashItems.get(globalIndex);
-                            if (item != null && item.getType() != Material.AIR) {
-                                inv.setItem(slot, item.clone());
-                            }
-                        }
-                        displayIndex++;
                     }
                 }
             }
 
-            int itemsOnPage = displayIndex;
-            boolean hasMoreItems = hasMoreItemsOnPage(page);
+            // Add navigation buttons
+            boolean hasMoreItems = logicalCount > (page + 1) * maxStoragePerPage;
 
             if (page == 0) {
-                if (itemsOnPage >= maxStoragePerPage || hasMoreItems) {
+                if (hasMoreItems) {
                     inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, nextPageName));
                 }
             } else {
                 inv.setItem(5 * 9 + 2, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
-                if (itemsOnPage >= maxStoragePerPage || hasMoreItems) {
+                if (hasMoreItems) {
                     inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
                 }
             }
         }
 
         globalTrashInventories.put(player, inv);
+        slotGlobalIndexMap.put(player, slotToGlobalIndex);
         player.openInventory(inv);
     }
 
@@ -249,15 +266,16 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private boolean hasMoreItemsOnPage(int page) {
-        int startIndex = (page + 1) * getMaxStoragePerPage();
-        if (startIndex >= globalTrashItems.size()) {
-            return false;
-        }
+        int maxStoragePerPage = getMaxStoragePerPage();
+        int logicalEndIndex = (page + 1) * maxStoragePerPage;
+        int logicalCount = 0;
 
-        for (int i = startIndex; i < globalTrashItems.size(); i++) {
-            ItemStack item = globalTrashItems.get(i);
+        for (ItemStack item : globalTrashItems) {
             if (item != null && item.getType() != Material.AIR) {
-                return true;
+                if (logicalCount >= logicalEndIndex) {
+                    return true;
+                }
+                logicalCount++;
             }
         }
         return false;
@@ -350,29 +368,23 @@ public final class Shan extends JavaPlugin implements Listener {
                 synchronized (trashLock) {
                     ItemStack clickedItem = event.getCurrentItem();
                     if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                        int currentPage = playerPage.getOrDefault(player, 0);
-                        int slotOnPage = getSlotOnPage(row, col);
-                        int globalIndex = currentPage * getMaxStoragePerPage() + slotOnPage;
-
-                        if (globalIndex < globalTrashItems.size()) {
-                            ItemStack item = globalTrashItems.get(globalIndex);
-                            if (item != null) {
-                                globalTrashItems.remove(globalIndex);
-                                player.getInventory().addItem(clickedItem.clone());
-                                event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
-                                player.updateInventory();
+                        Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
+                        if (slotMap != null) {
+                            Integer globalIndex = slotMap.get(slot);
+                            if (globalIndex != null && globalIndex >= 0 && globalIndex < globalTrashItems.size()) {
+                                ItemStack item = globalTrashItems.get(globalIndex);
+                                if (item != null) {
+                                    globalTrashItems.remove(globalIndex);
+                                    player.getInventory().addItem(clickedItem.clone());
+                                    int currentPage = playerPage.getOrDefault(player, 0);
+                                    openGlobalTrash(player, currentPage);
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
-
-    private int getSlotOnPage(int row, int col) {
-        int innerRow = row - 1;
-        int innerCol = col - 1;
-        return innerRow * 7 + innerCol;
     }
 
     @EventHandler
