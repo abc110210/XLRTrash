@@ -80,16 +80,18 @@ public final class Shan extends JavaPlugin implements Listener {
         Inventory inv = Bukkit.createInventory(null, SIZE, GLOBAL_TRASH_TITLE);
 
         synchronized (trashLock) {
+            int itemIndex = 0;
             for (int row = 0; row < ROWS; row++) {
                 for (int col = 0; col < 9; col++) {
                     if (isBorder(row, col)) {
                         inv.setItem(row * 9 + col, createBorderItem(Material.BLACK_STAINED_GLASS_PANE));
                     } else if (isInnerStorage(row, col)) {
-                        int index = getStorageIndex(row, col, page);
-                        if (index < globalTrashItems.size()) {
-                            ItemStack item = globalTrashItems.get(index);
-                            if (item != null) {
+                        int globalIndex = page * getMaxStoragePerPage() + itemIndex;
+                        if (globalIndex < globalTrashItems.size()) {
+                            ItemStack item = globalTrashItems.get(globalIndex);
+                            if (item != null && item.getType() != Material.AIR) {
                                 inv.setItem(row * 9 + col, item.clone());
+                                itemIndex++;
                             }
                         }
                     }
@@ -103,13 +105,27 @@ public final class Shan extends JavaPlugin implements Listener {
         }
 
         int maxStoragePerPage = getMaxStoragePerPage();
-        boolean hasNextPage = (page + 1) * maxStoragePerPage < globalTrashItems.size();
+        int itemsOnCurrentPage = countItemsOnPage(page);
+        boolean hasNextPage = itemsOnCurrentPage >= maxStoragePerPage ||
+                             (page + 1) * maxStoragePerPage < globalTrashItems.size();
         if (hasNextPage) {
             inv.setItem(lastRow * 9 + 4, createNavigationItem(Material.SLIME_BALL, "§a下一页"));
         }
 
         globalTrashInventories.put(player, inv);
         player.openInventory(inv);
+    }
+
+    private int countItemsOnPage(int page) {
+        int count = 0;
+        int startIndex = page * getMaxStoragePerPage();
+        for (int i = startIndex; i < globalTrashItems.size() && count < getMaxStoragePerPage(); i++) {
+            ItemStack item = globalTrashItems.get(i);
+            if (item != null && item.getType() != Material.AIR) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private boolean isBorder(int row, int col) {
@@ -212,11 +228,11 @@ public final class Shan extends JavaPlugin implements Listener {
                 synchronized (trashLock) {
                     ItemStack clickedItem = event.getCurrentItem();
                     if (clickedItem != null && clickedItem.getType() != Material.AIR) {
-                        int index = getStorageIndex(row, col, playerPage.getOrDefault(player, 0));
-                        if (index < globalTrashItems.size()) {
-                            ItemStack item = globalTrashItems.get(index);
+                        int itemIndex = findItemIndexOnPage(row, col, playerPage.getOrDefault(player, 0));
+                        if (itemIndex >= 0 && itemIndex < globalTrashItems.size()) {
+                            ItemStack item = globalTrashItems.get(itemIndex);
                             if (item != null) {
-                                globalTrashItems.remove(index);
+                                globalTrashItems.remove(itemIndex);
                                 player.getInventory().addItem(clickedItem.clone());
                                 event.getClickedInventory().setItem(slot, new ItemStack(Material.AIR));
                                 player.updateInventory();
@@ -226,6 +242,27 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
             }
         }
+    }
+
+    private int findItemIndexOnPage(int row, int col, int page) {
+        int innerRow = row - 1;
+        int innerCol = col - 1;
+        int slotOnPage = innerRow * 7 + innerCol;
+
+        int startIndex = page * getMaxStoragePerPage();
+        int count = 0;
+
+        for (int i = startIndex; i < globalTrashItems.size(); i++) {
+            ItemStack item = globalTrashItems.get(i);
+            if (item != null && item.getType() != Material.AIR) {
+                if (count == slotOnPage) {
+                    return i;
+                }
+                count++;
+            }
+        }
+
+        return -1;
     }
 
     @EventHandler
