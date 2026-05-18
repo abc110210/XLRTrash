@@ -31,12 +31,15 @@ public final class Shan extends JavaPlugin implements Listener {
     private String nextPageName;
     private String prevPageName;
     private String transferTip;
+    private String clearTip;
+    private int clearInterval;
 
     private final List<ItemStack> globalTrashItems = new CopyOnWriteArrayList<>();
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
     private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
     private final Object trashLock = new Object();
+    private int cleanupTaskId = -1;
 
     @Override
     public void onEnable() {
@@ -59,7 +62,35 @@ public final class Shan extends JavaPlugin implements Listener {
             return true;
         });
 
+        startCleanupTask();
+
         Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
+    }
+
+    @Override
+    public void onDisable() {
+        if (cleanupTaskId != -1) {
+            getServer().getScheduler().cancelTask(cleanupTaskId);
+        }
+        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄寄の家插件!");
+    }
+
+    private void startCleanupTask() {
+        long intervalTicks = clearInterval * 60L * 20L;
+        cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
+            cleanupTrash();
+        }, intervalTicks, intervalTicks).getTaskId();
+    }
+
+    private void cleanupTrash() {
+        int clearedItems = 0;
+        synchronized (trashLock) {
+            clearedItems = globalTrashItems.size();
+            globalTrashItems.clear();
+        }
+
+        Bukkit.broadcastMessage(clearTip);
+        Bukkit.getConsoleSender().sendMessage(ChatColor.YELLOW + "[XLRTrash] 已清除全服垃圾桶中的 " + clearedItems + " 个物品");
     }
 
     private void loadConfig() {
@@ -68,15 +99,12 @@ public final class Shan extends JavaPlugin implements Listener {
         nextPageName = color(getConfig().getString("GlobalTrash.Page1Next.name", "&a下一页"));
         prevPageName = color(getConfig().getString("GlobalTrash2.Back.name", "&a上一页"));
         transferTip = color(getConfig().getString("TrashTip", "&a物品已转移到全服垃圾桶！"));
+        clearTip = color(getConfig().getString("ClearTip", "&c[全服垃圾桶] 垃圾桶已定期清理！"));
+        clearInterval = getConfig().getInt("ClearInterval", 5);
     }
 
     private String color(String text) {
         return ChatColor.translateAlternateColorCodes('&', text);
-    }
-
-    @Override
-    public void onDisable() {
-        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄寄の家插件!");
     }
 
     private void openPersonalTrash(Player player) {
@@ -121,10 +149,12 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
             }
 
-            if (page > 0) {
+            if (page == 0) {
+                inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, nextPageName));
+            } else {
                 inv.setItem(5 * 9 + 2, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
+                inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
             }
-            inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
         }
 
         globalTrashInventories.put(player, inv);
@@ -140,7 +170,7 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private boolean isNavigationSlot(int row, int col) {
-        return row == 5 && (col == 2 || col == 6);
+        return row == 5 && (col == 2 || col == 4 || col == 6);
     }
 
     private int getStorageIndex(int row, int col, int page) {
@@ -220,6 +250,8 @@ public final class Shan extends JavaPlugin implements Listener {
                 int currentPage = playerPage.getOrDefault(player, 0);
                 if (col == 2 && currentPage > 0) {
                     openGlobalTrash(player, currentPage - 1);
+                } else if (col == 4 && currentPage == 0) {
+                    openGlobalTrash(player, currentPage + 1);
                 } else if (col == 6) {
                     openGlobalTrash(player, currentPage + 1);
                 }
