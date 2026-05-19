@@ -3,6 +3,8 @@ package main.xlingran;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.command.PluginCommand;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -54,19 +56,25 @@ public final class Shan extends JavaPlugin implements Listener {
 
         getServer().getPluginManager().registerEvents(this, this);
 
-        getCommand("xlrtrash").setExecutor((sender, command, label, args) -> {
-            if (sender instanceof Player) {
-                openPersonalTrash((Player) sender);
-            }
-            return true;
-        });
+        PluginCommand trashCmd = getCommand("xlrtrash");
+        if (trashCmd != null) {
+            trashCmd.setExecutor((sender, command, label, args) -> {
+                if (sender instanceof Player) {
+                    openPersonalTrash((Player) sender);
+                }
+                return true;
+            });
+        }
 
-        getCommand("xlrglobaltrash").setExecutor((sender, command, label, args) -> {
-            if (sender instanceof Player) {
-                openGlobalTrash((Player) sender, 0);
-            }
-            return true;
-        });
+        PluginCommand globalTrashCmd = getCommand("xlrglobaltrash");
+        if (globalTrashCmd != null) {
+            globalTrashCmd.setExecutor((sender, command, label, args) -> {
+                if (sender instanceof Player) {
+                    openGlobalTrash((Player) sender, 0);
+                }
+                return true;
+            });
+        }
 
         startCleanupTask();
         Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
@@ -121,9 +129,7 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private void performCleanup() {
-        int clearedItems = 0;
         synchronized (trashLock) {
-            clearedItems = globalTrashItems.size();
             globalTrashItems.clear();
         }
 
@@ -155,11 +161,15 @@ public final class Shan extends JavaPlugin implements Listener {
         clearInterval = getConfig().getInt("ClearInterval", 5);
 
         countdownTips = new HashMap<>();
-        if (getConfig().getConfigurationSection("ClearTip") != null) {
-            for (String key : getConfig().getConfigurationSection("ClearTip").getKeys(false)) {
+        ConfigurationSection clearTipSection = getConfig().getConfigurationSection("ClearTip");
+        if (clearTipSection != null) {
+            for (String key : clearTipSection.getKeys(false)) {
                 try {
                     int seconds = Integer.parseInt(key);
-                    countdownTips.put(seconds, color(getConfig().getString("ClearTip." + key)));
+                    String tip = clearTipSection.getString(key);
+                    if (tip != null) {
+                        countdownTips.put(seconds, color(tip));
+                    }
                 } catch (NumberFormatException ignored) {
                 }
             }
@@ -329,11 +339,9 @@ public final class Shan extends JavaPlugin implements Listener {
             return;
         }
 
-        if (!(event.getWhoClicked() instanceof Player)) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-
-        Player player = (Player) event.getWhoClicked();
         int slot = event.getSlot();
 
         if (title.equals(personalTrashTitle)) {
@@ -410,7 +418,7 @@ public final class Shan extends JavaPlugin implements Listener {
 
                 // 关键：所有数据操作必须在同步块内原子执行
                 ItemStack itemToGive = null;
-                boolean shouldRemove = false;
+                boolean shouldRemove;
                 
                 synchronized (trashLock) {
                     // 验证：索引是否合法
@@ -442,7 +450,7 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
 
                 // 同步块外执行所有 Bukkit API 操作
-                if (shouldRemove && itemToGive != null) {
+                if (shouldRemove) {
                     // 给玩家物品
                     player.getInventory().addItem(itemToGive);
                     
@@ -451,7 +459,7 @@ public final class Shan extends JavaPlugin implements Listener {
                         int currentPage = playerPage.getOrDefault(player, 0);
                         openGlobalTrash(player, currentPage);
                     });
-                } else if (!shouldRemove) {
+                } else {
                     // 物品已被其他操作处理，刷新界面
                     Bukkit.getScheduler().runTask(this, () -> {
                         int currentPage = playerPage.getOrDefault(player, 0);
@@ -497,7 +505,7 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
 
                 // 如果没有找到可以合并的物品，创建新的
-                if (!mergedItem && remainingAmount > 0) {
+                if (!mergedItem) {
                     ItemStack newItem = item.clone();
                     newItem.setAmount(Math.min(remainingAmount, maxStackSize));
                     merged.add(newItem);
@@ -524,7 +532,10 @@ public final class Shan extends JavaPlugin implements Listener {
                     key.append("|name:").append(meta.getDisplayName());
                 }
                 if (meta.hasLore()) {
-                    key.append("|lore:").append(String.join(",", meta.getLore()));
+                    List<String> lore = meta.getLore();
+                    if (lore != null) {
+                        key.append("|lore:").append(String.join(",", lore));
+                    }
                 }
                 if (meta.hasEnchants()) {
                     key.append("|ench:");
@@ -535,8 +546,7 @@ public final class Shan extends JavaPlugin implements Listener {
                 if (meta.isUnbreakable()) {
                     key.append("|unbreakable");
                 }
-                if (meta instanceof Damageable) {
-                    Damageable damageable = (Damageable) meta;
+                if (meta instanceof Damageable damageable) {
                     if (damageable.hasDamage()) {
                         key.append("|damage:").append(damageable.getDamage());
                     }
@@ -552,7 +562,7 @@ public final class Shan extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getPlayer() instanceof Player)) {
+        if (!(event.getPlayer() instanceof Player player)) {
             return;
         }
 
@@ -561,7 +571,6 @@ public final class Shan extends JavaPlugin implements Listener {
             return;
         }
 
-        Player player = (Player) event.getPlayer();
         Inventory inv = event.getInventory();
 
         synchronized (trashLock) {
