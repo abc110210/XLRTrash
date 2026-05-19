@@ -3,12 +3,15 @@ package main.xlingran;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.command.PluginCommand;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.Damageable;
@@ -26,6 +29,21 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private static final int ROWS = 6;
     private static final int SIZE = ROWS * 9;
+    private static final int TICKS_PER_SECOND = 20;
+    private static final long CLICK_DEBOUNCE_MS = 500;
+    private static final int MAX_STORAGE_PER_PAGE = 28; // 4行 * 7列
+    
+    // 导航按钮位置常量
+    private static final int NAV_PREV_COL = 2;
+    private static final int NAV_CENTER_COL = 4;
+    private static final int NAV_NEXT_COL = 6;
+    private static final int NAV_ROW = 5;
+    
+    // 存储区域边界
+    private static final int STORAGE_START_ROW = 1;
+    private static final int STORAGE_END_ROW = 4;
+    private static final int STORAGE_START_COL = 1;
+    private static final int STORAGE_END_COL = 7;
 
     private String personalTrashTitle;
     private String globalTrashTitle;
@@ -38,14 +56,18 @@ public final class Shan extends JavaPlugin implements Listener {
     private int clearInterval;
     private volatile boolean isCountingDown = false;
 
-    private final List<ItemStack> globalTrashItems = new ArrayList<>();
+    // 使用 LinkedList 优化频繁删除中间元素的性能
+    private final List<ItemStack> globalTrashItems = new java.util.LinkedList<>();
+    private volatile int validItemCount = 0; // 缓存有效物品数量，优化分页查询
     private final Map<Player, Inventory> personalTrashInventories = new HashMap<>();
     private final Map<Player, Inventory> globalTrashInventories = new HashMap<>();
     private final Map<Player, Integer> playerPage = new HashMap<>();
     private final Map<Player, Map<Integer, Integer>> slotGlobalIndexMap = new HashMap<>();
-    private final Map<String, Long> clickCooldowns = new HashMap<>(); // 防抖机制
+    private final Map<Player, Map<Integer, Long>> clickCooldowns = new HashMap<>(); // 防抖机制：Player -> (Slot -> Timestamp)
     private final Object trashLock = new Object();
     private int cleanupTaskId = -1;
+    private int countdownTaskId = -1; // 倒计时任务ID
+    private int cooldownCleanupTaskId = -1; // 防抖记录清理任务ID
 
     @Override
     public void onEnable() {
@@ -54,19 +76,25 @@ public final class Shan extends JavaPlugin implements Listener {
 
         getServer().getPluginManager().registerEvents(this, this);
 
-        getCommand("xlrtrash").setExecutor((sender, command, label, args) -> {
-            if (sender instanceof Player) {
-                openPersonalTrash((Player) sender);
-            }
-            return true;
-        });
+        PluginCommand trashCmd = getCommand("xlrtrash");
+        if (trashCmd != null) {
+            trashCmd.setExecutor((sender, command, label, args) -> {
+                if (sender instanceof Player) {
+                    openPersonalTrash((Player) sender);
+                }
+                return true;
+            });
+        }
 
-        getCommand("xlrglobaltrash").setExecutor((sender, command, label, args) -> {
-            if (sender instanceof Player) {
-                openGlobalTrash((Player) sender, 0);
-            }
-            return true;
-        });
+        PluginCommand globalTrashCmd = getCommand("xlrglobaltrash");
+        if (globalTrashCmd != null) {
+            globalTrashCmd.setExecutor((sender, command, label, args) -> {
+                if (sender instanceof Player) {
+                    openGlobalTrash((Player) sender, 0);
+                }
+                return true;
+            });
+        }
 
         startCleanupTask();
         Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "欢迎使用寄の家 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.GREEN + " 插件,交流群: 943446220");
@@ -77,14 +105,35 @@ public final class Shan extends JavaPlugin implements Listener {
         if (cleanupTaskId != -1) {
             getServer().getScheduler().cancelTask(cleanupTaskId);
         }
+        if (countdownTaskId != -1) {
+            getServer().getScheduler().cancelTask(countdownTaskId);
+        }
+        if (cooldownCleanupTaskId != -1) {
+            getServer().getScheduler().cancelTask(cooldownCleanupTaskId);
+        }
         Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "插件 " + ChatColor.AQUA + "全服垃圾桶" + ChatColor.RED + " 已卸载，感谢使用寄の家插件!");
     }
 
     private void startCleanupTask() {
-        long intervalTicks = clearInterval * 60L * 20L;
-        cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
-            startCountdown();
-        }, intervalTicks, intervalTicks).getTaskId();
+        long intervalTicks = clearInterval * 60L * TICKS_PER_SECOND;
+        cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, this::startCountdown, intervalTicks, intervalTicks).getTaskId();
+        
+        // 启动防抖记录定期清理任务（每分钟清理一次过期记录）
+        startCooldownCleanupTask();
+    }
+    
+    private void startCooldownCleanupTask() {
+        cooldownCleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
+            long now = System.currentTimeMillis();
+            synchronized (trashLock) {
+                // 清理所有玩家的过期防抖记录
+                clickCooldowns.forEach((player, cooldownMap) -> {
+                    cooldownMap.entrySet().removeIf(entry -> now - entry.getValue() > CLICK_DEBOUNCE_MS);
+                });
+                // 移除空的防抖 Map
+                clickCooldowns.values().removeIf(Map::isEmpty);
+            }
+        }, 20L * 60, 20L * 60).getTaskId(); // 1分钟后开始，每分钟执行一次
     }
 
     private void startCountdown() {
@@ -97,18 +146,28 @@ public final class Shan extends JavaPlugin implements Listener {
         List<Integer> sortedSeconds = new ArrayList<>(countdownTips.keySet());
         sortedSeconds.sort(Integer::compareTo);
 
-        int maxSeconds = sortedSeconds.get(sortedSeconds.size() - 1);
-
-        for (int seconds : sortedSeconds) {
-            int finalSeconds = seconds;
-            long delayTicks = (maxSeconds - seconds) * 20L;
-            Bukkit.getScheduler().runTaskLater(this, () -> {
-                broadcastCountdown(finalSeconds);
-                if (finalSeconds == 0) {
-                    performCleanup();
-                }
-            }, delayTicks);
-        }
+        int maxSeconds = sortedSeconds.getLast();
+        final int[] currentIndex = {0}; // 使用数组包装以在 Lambda 中修改
+        
+        // 使用单个循环任务替代多个 runTaskLater，减少任务数
+        countdownTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (currentIndex[0] >= sortedSeconds.size()) {
+                Bukkit.getScheduler().cancelTask(countdownTaskId);
+                countdownTaskId = -1;
+                return;
+            }
+            
+            int seconds = sortedSeconds.get(currentIndex[0]);
+            broadcastCountdown(seconds);
+            
+            if (seconds == 0) {
+                performCleanup();
+                Bukkit.getScheduler().cancelTask(countdownTaskId);
+                countdownTaskId = -1;
+            }
+            
+            currentIndex[0]++;
+        }, 0, TICKS_PER_SECOND).getTaskId();
     }
 
     private void broadcastCountdown(int seconds) {
@@ -121,10 +180,9 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private void performCleanup() {
-        int clearedItems = 0;
         synchronized (trashLock) {
-            clearedItems = globalTrashItems.size();
             globalTrashItems.clear();
+            validItemCount = 0; // 重置计数器
         }
 
         isCountingDown = false;
@@ -152,14 +210,24 @@ public final class Shan extends JavaPlugin implements Listener {
         transferTip = color(getConfig().getString("TrashTip", "&a物品已转移到全服垃圾桶！"));
         clearTrashDisabledTip = color(getConfig().getString("ClearTrashDisabledTip", "&a倒计时结束前无法打开垃圾桶"));
         clearTrashDisabled = getConfig().getBoolean("ClearTrashDisabled", true);
+        
+        // 参数校验：清理间隔必须 > 0
         clearInterval = getConfig().getInt("ClearInterval", 5);
+        if (clearInterval <= 0) {
+            clearInterval = 5; // 使用默认值
+            Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[XLRTrash] ClearInterval 配置无效，已使用默认值 5 分钟");
+        }
 
         countdownTips = new HashMap<>();
-        if (getConfig().getConfigurationSection("ClearTip") != null) {
-            for (String key : getConfig().getConfigurationSection("ClearTip").getKeys(false)) {
+        ConfigurationSection clearTipSection = getConfig().getConfigurationSection("ClearTip");
+        if (clearTipSection != null) {
+            for (String key : clearTipSection.getKeys(false)) {
                 try {
                     int seconds = Integer.parseInt(key);
-                    countdownTips.put(seconds, color(getConfig().getString("ClearTip." + key)));
+                    String tip = clearTipSection.getString(key);
+                    if (tip != null) {
+                        countdownTips.put(seconds, color(tip));
+                    }
                 } catch (NumberFormatException ignored) {
                 }
             }
@@ -212,9 +280,11 @@ public final class Shan extends JavaPlugin implements Listener {
                     validIndices.add(i);
                 }
             }
+            
+            // 更新缓存的有效物品数
+            validItemCount = validItems.size();
 
-            int maxStoragePerPage = getMaxStoragePerPage();
-            int startIndex = page * maxStoragePerPage;
+            int startIndex = page * MAX_STORAGE_PER_PAGE;
 
             // Fill all slots with borders first
             for (int row = 0; row < ROWS; row++) {
@@ -229,8 +299,8 @@ public final class Shan extends JavaPlugin implements Listener {
             // Fill items in inner storage
             int displaySlot = 0;
 
-            for (int row = 1; row <= 4 && displaySlot < maxStoragePerPage; row++) {
-                for (int col = 1; col <= 7 && displaySlot < maxStoragePerPage; col++) {
+            for (int row = STORAGE_START_ROW; row <= STORAGE_END_ROW && displaySlot < MAX_STORAGE_PER_PAGE; row++) {
+                for (int col = STORAGE_START_COL; col <= STORAGE_END_COL && displaySlot < MAX_STORAGE_PER_PAGE; col++) {
                     int itemIndex = startIndex + displaySlot;
                     if (itemIndex < validItems.size()) {
                         int slot = row * 9 + col;
@@ -245,16 +315,16 @@ public final class Shan extends JavaPlugin implements Listener {
             }
 
             // Add navigation buttons
-            boolean hasMoreItems = validItems.size() > (page + 1) * maxStoragePerPage;
+            boolean hasMoreItems = hasMoreItemsOnPage(page);
 
             if (page == 0) {
                 if (hasMoreItems) {
-                    inv.setItem(5 * 9 + 4, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                    inv.setItem(NAV_ROW * 9 + NAV_CENTER_COL, createNavigationItem(Material.SLIME_BALL, nextPageName));
                 }
             } else {
-                inv.setItem(5 * 9 + 2, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
+                inv.setItem(NAV_ROW * 9 + NAV_PREV_COL, createNavigationItem(Material.LAPIS_LAZULI, prevPageName));
                 if (hasMoreItems) {
-                    inv.setItem(5 * 9 + 6, createNavigationItem(Material.SLIME_BALL, nextPageName));
+                    inv.setItem(NAV_ROW * 9 + NAV_NEXT_COL, createNavigationItem(Material.SLIME_BALL, nextPageName));
                 }
             }
         }
@@ -265,15 +335,16 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private boolean isBorder(int row, int col) {
-        return row == 0 || row == 5 || col == 0 || col == 8;
+        return !isInnerStorage(row, col) && !isNavigationSlot(row, col);
     }
 
     private boolean isInnerStorage(int row, int col) {
-        return row > 0 && row < 5 && col > 0 && col < 8;
+        return row >= STORAGE_START_ROW && row <= STORAGE_END_ROW 
+            && col >= STORAGE_START_COL && col <= STORAGE_END_COL;
     }
 
     private boolean isNavigationSlot(int row, int col) {
-        return row == 5 && (col == 2 || col == 4 || col == 6);
+        return row == NAV_ROW && (col == NAV_PREV_COL || col == NAV_CENTER_COL || col == NAV_NEXT_COL);
     }
 
     private int getStorageIndex(int row, int col, int page) {
@@ -283,23 +354,14 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     private int getMaxStoragePerPage() {
-        return 4 * 7;
+        return MAX_STORAGE_PER_PAGE;
     }
 
     private boolean hasMoreItemsOnPage(int page) {
-        int maxStoragePerPage = getMaxStoragePerPage();
-        int logicalEndIndex = (page + 1) * maxStoragePerPage;
-        int logicalCount = 0;
-
-        for (ItemStack item : globalTrashItems) {
-            if (item != null && item.getType() != Material.AIR) {
-                if (logicalCount >= logicalEndIndex) {
-                    return true;
-                }
-                logicalCount++;
-            }
+        // 使用缓存的有效物品数，避免遍历全量列表
+        synchronized (trashLock) {
+            return validItemCount > (page + 1) * MAX_STORAGE_PER_PAGE;
         }
-        return false;
     }
 
     private ItemStack createBorderItem(Material material) {
@@ -329,11 +391,9 @@ public final class Shan extends JavaPlugin implements Listener {
             return;
         }
 
-        if (!(event.getWhoClicked() instanceof Player)) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-
-        Player player = (Player) event.getWhoClicked();
         int slot = event.getSlot();
 
         if (title.equals(personalTrashTitle)) {
@@ -367,13 +427,13 @@ public final class Shan extends JavaPlugin implements Listener {
 
             if (isNavigationSlot(row, col)) {
                 int currentPage = playerPage.getOrDefault(player, 0);
-                if (col == 2 && currentPage > 0) {
+                if (col == NAV_PREV_COL && currentPage > 0) {
                     openGlobalTrash(player, currentPage - 1);
-                } else if (col == 4 && currentPage == 0) {
+                } else if (col == NAV_CENTER_COL && currentPage == 0) {
                     if (hasMoreItemsOnPage(currentPage)) {
                         openGlobalTrash(player, currentPage + 1);
                     }
-                } else if (col == 6) {
+                } else if (col == NAV_NEXT_COL) {
                     if (hasMoreItemsOnPage(currentPage)) {
                         openGlobalTrash(player, currentPage + 1);
                     }
@@ -387,12 +447,12 @@ public final class Shan extends JavaPlugin implements Listener {
 
             if (isInnerStorage(row, col)) {
                 // 防抖检查：防止同一槽位被快速重复点击
-                String clickKey = player.getName() + "_" + slot;
-                long currentTime = System.currentTimeMillis();
-                Long lastClickTime = clickCooldowns.get(clickKey);
-                
-                if (lastClickTime != null && (currentTime - lastClickTime) < 500) {
-                    return;
+                Map<Integer, Long> playerCooldowns = clickCooldowns.get(player);
+                if (playerCooldowns != null) {
+                    Long lastClickTime = playerCooldowns.get(slot);
+                    if (lastClickTime != null && (System.currentTimeMillis() - lastClickTime) < CLICK_DEBOUNCE_MS) {
+                        return;
+                    }
                 }
                 
                 Map<Integer, Integer> slotMap = slotGlobalIndexMap.get(player);
@@ -406,43 +466,53 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
 
                 // 记录点击时间
-                clickCooldowns.put(clickKey, currentTime);
+                clickCooldowns.computeIfAbsent(player, k -> new HashMap<>()).put(slot, System.currentTimeMillis());
 
                 // 关键：所有数据操作必须在同步块内原子执行
                 ItemStack itemToGive = null;
-                boolean shouldRemove = false;
+                boolean shouldRemove;
                 
                 synchronized (trashLock) {
                     // 验证：索引是否合法
                     if (globalIndex < 0 || globalIndex >= globalTrashItems.size()) {
-                        clickCooldowns.remove(clickKey);
+                        if (playerCooldowns != null) {
+                            playerCooldowns.remove(slot);
+                        }
                         shouldRemove = false;
                     } else {
                         ItemStack itemInList = globalTrashItems.get(globalIndex);
                         if (itemInList == null || itemInList.getType() == Material.AIR) {
                             // 空物品
-                            clickCooldowns.remove(clickKey);
+                            if (playerCooldowns != null) {
+                                playerCooldowns.remove(slot);
+                            }
                             shouldRemove = false;
                         } else {
                             // 步骤1：先克隆物品给玩家
                             itemToGive = itemInList.clone();
                             
                             // 步骤2：使用 int 索引删除（关键修复）
-                            // 确保调用 remove(int) 而不是 remove(Object)
-                            int indexToRemove = globalIndex.intValue();
-                            // 注意：remove(int) 返回的是被移除的元素，不是 boolean
-                            globalTrashItems.remove(indexToRemove);
+                            // 显式拆箱为 int 变量，确保调用 remove(int) 而不是 remove(Object)
+                            int index = globalIndex;
+                            globalTrashItems.remove(index);
+                            
+                            // 更新缓存计数器
+                            synchronized (trashLock) {
+                                validItemCount = Math.max(0, validItemCount - 1);
+                            }
                             
                             // 步骤3：清除映射和防抖
                             slotGlobalIndexMap.remove(player);
-                            clickCooldowns.remove(clickKey);
+                            if (playerCooldowns != null) {
+                                playerCooldowns.remove(slot);
+                            }
                             shouldRemove = true; // 删除操作已执行
                         }
                     }
                 }
 
                 // 同步块外执行所有 Bukkit API 操作
-                if (shouldRemove && itemToGive != null) {
+                if (shouldRemove) {
                     // 给玩家物品
                     player.getInventory().addItem(itemToGive);
                     
@@ -451,7 +521,7 @@ public final class Shan extends JavaPlugin implements Listener {
                         int currentPage = playerPage.getOrDefault(player, 0);
                         openGlobalTrash(player, currentPage);
                     });
-                } else if (!shouldRemove) {
+                } else {
                     // 物品已被其他操作处理，刷新界面
                     Bukkit.getScheduler().runTask(this, () -> {
                         int currentPage = playerPage.getOrDefault(player, 0);
@@ -467,6 +537,35 @@ public final class Shan extends JavaPlugin implements Listener {
         String title = event.getView().getTitle();
         if (title.equals(globalTrashTitle)) {
             event.setCancelled(true);
+        }
+    }
+
+    private void mergeIntoGlobalItems(ItemStack newItem) {
+        if (newItem == null || newItem.getType() == Material.AIR) {
+            return;
+        }
+
+        int maxStackSize = newItem.getMaxStackSize();
+        int remainingAmount = newItem.getAmount();
+
+        // 尝试合并到现有物品
+        for (ItemStack existingItem : globalTrashItems) {
+            if (existingItem != null && existingItem.isSimilar(newItem) && existingItem.getAmount() < maxStackSize) {
+                int canAdd = Math.min(remainingAmount, maxStackSize - existingItem.getAmount());
+                existingItem.setAmount(existingItem.getAmount() + canAdd);
+                remainingAmount -= canAdd;
+                
+                if (remainingAmount == 0) {
+                    return; // 完全合并，不需要添加新物品
+                }
+            }
+        }
+
+        // 如果还有剩余，添加新的 ItemStack
+        if (remainingAmount > 0) {
+            ItemStack remainingItem = newItem.clone();
+            remainingItem.setAmount(remainingAmount);
+            globalTrashItems.add(remainingItem);
         }
     }
 
@@ -497,7 +596,7 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
 
                 // 如果没有找到可以合并的物品，创建新的
-                if (!mergedItem && remainingAmount > 0) {
+                if (!mergedItem) {
                     ItemStack newItem = item.clone();
                     newItem.setAmount(Math.min(remainingAmount, maxStackSize));
                     merged.add(newItem);
@@ -524,19 +623,21 @@ public final class Shan extends JavaPlugin implements Listener {
                     key.append("|name:").append(meta.getDisplayName());
                 }
                 if (meta.hasLore()) {
-                    key.append("|lore:").append(String.join(",", meta.getLore()));
+                    List<String> lore = meta.getLore();
+                    if (lore != null) {
+                        key.append("|lore:").append(String.join(",", lore));
+                    }
                 }
                 if (meta.hasEnchants()) {
                     key.append("|ench:");
-                    meta.getEnchants().forEach((ench, level) -> {
-                        key.append(ench.getKey().getKey()).append(":").append(level).append(";");
-                    });
+                    meta.getEnchants().forEach((ench, level) ->
+                        key.append(ench.getKey().getKey()).append(":").append(level).append(";")
+                    );
                 }
                 if (meta.isUnbreakable()) {
                     key.append("|unbreakable");
                 }
-                if (meta instanceof Damageable) {
-                    Damageable damageable = (Damageable) meta;
+                if (meta instanceof Damageable damageable) {
                     if (damageable.hasDamage()) {
                         key.append("|damage:").append(damageable.getDamage());
                     }
@@ -551,8 +652,22 @@ public final class Shan extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onPlayerQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        cleanupPlayerData(player);
+    }
+    
+    private void cleanupPlayerData(Player player) {
+        personalTrashInventories.remove(player);
+        globalTrashInventories.remove(player);
+        playerPage.remove(player);
+        slotGlobalIndexMap.remove(player);
+        clickCooldowns.remove(player); // 清理该玩家的防抖记录
+    }
+
+    @EventHandler
     public void onInventoryClose(InventoryCloseEvent event) {
-        if (!(event.getPlayer() instanceof Player)) {
+        if (!(event.getPlayer() instanceof Player player)) {
             return;
         }
 
@@ -561,7 +676,6 @@ public final class Shan extends JavaPlugin implements Listener {
             return;
         }
 
-        Player player = (Player) event.getPlayer();
         Inventory inv = event.getInventory();
 
         synchronized (trashLock) {
@@ -583,34 +697,21 @@ public final class Shan extends JavaPlugin implements Listener {
 
             // 再合并到 globalTrashItems 中已有的相同物品
             for (ItemStack newItem : mergedItems) {
-                if (newItem != null && newItem.getType() != Material.AIR) {
-                    int maxStackSize = newItem.getMaxStackSize();
-                    int remainingAmount = newItem.getAmount();
-
-                    // 尝试合并到现有物品
-                    for (ItemStack existingItem : globalTrashItems) {
-                        if (existingItem != null && existingItem.isSimilar(newItem) && existingItem.getAmount() < maxStackSize) {
-                            int canAdd = Math.min(remainingAmount, maxStackSize - existingItem.getAmount());
-                            existingItem.setAmount(existingItem.getAmount() + canAdd);
-                            remainingAmount -= canAdd;
-                            
-                            if (remainingAmount == 0) {
-                                break; // 完全合并，不需要添加新物品
-                            }
-                        }
-                    }
-
-                    // 如果还有剩余，添加新的 ItemStack
-                    if (remainingAmount > 0) {
-                        ItemStack remainingItem = newItem.clone();
-                        remainingItem.setAmount(remainingAmount);
-                        globalTrashItems.add(remainingItem);
+                mergeIntoGlobalItems(newItem);
+            }
+            
+            // 更新缓存计数器
+            synchronized (trashLock) {
+                validItemCount = 0;
+                for (ItemStack item : globalTrashItems) {
+                    if (item != null && item.getType() != Material.AIR) {
+                        validItemCount++;
                     }
                 }
             }
         }
 
-        personalTrashInventories.remove(player);
+        cleanupPlayerData(player);
         player.sendMessage(transferTip);
     }
 }
