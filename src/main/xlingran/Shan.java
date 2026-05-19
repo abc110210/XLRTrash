@@ -90,9 +90,7 @@ public final class Shan extends JavaPlugin implements Listener {
 
     private void startCleanupTask() {
         long intervalTicks = clearInterval * 60L * 20L;
-        cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, () -> {
-            startCountdown();
-        }, intervalTicks, intervalTicks).getTaskId();
+        cleanupTaskId = Bukkit.getScheduler().runTaskTimer(this, this::startCountdown, intervalTicks, intervalTicks).getTaskId();
     }
 
     private void startCountdown() {
@@ -105,7 +103,7 @@ public final class Shan extends JavaPlugin implements Listener {
         List<Integer> sortedSeconds = new ArrayList<>(countdownTips.keySet());
         sortedSeconds.sort(Integer::compareTo);
 
-        int maxSeconds = sortedSeconds.get(sortedSeconds.size() - 1);
+        int maxSeconds = sortedSeconds.getLast();
 
         for (int seconds : sortedSeconds) {
             int finalSeconds = seconds;
@@ -454,6 +452,9 @@ public final class Shan extends JavaPlugin implements Listener {
                     // 给玩家物品
                     player.getInventory().addItem(itemToGive);
                     
+                    // 清除玩家光标物品，防止鼠标自动移动
+                    player.setItemOnCursor(null);
+                    
                     // 立即刷新 GUI（1 tick 延迟确保客户端同步）
                     Bukkit.getScheduler().runTask(this, () -> {
                         int currentPage = playerPage.getOrDefault(player, 0);
@@ -539,9 +540,9 @@ public final class Shan extends JavaPlugin implements Listener {
                 }
                 if (meta.hasEnchants()) {
                     key.append("|ench:");
-                    meta.getEnchants().forEach((ench, level) -> {
-                        key.append(ench.getKey().getKey()).append(":").append(level).append(";");
-                    });
+                    meta.getEnchants().forEach((ench, level) ->
+                        key.append(ench.getKey().getKey()).append(":").append(level).append(";")
+                    );
                 }
                 if (meta.isUnbreakable()) {
                     key.append("|unbreakable");
